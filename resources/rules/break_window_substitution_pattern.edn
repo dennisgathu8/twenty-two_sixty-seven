@@ -1,0 +1,5 @@
+{:rule/id :rule/break-window-substitution-pattern
+ :rule/version "1.0.0"
+ :rule/description "Flags a team's tendency to make a substitution inside a break window"
+ :rule/window-s 300
+ :rule/predicate (break-adjacent-substitution ?team ?stoppage ?event)}
