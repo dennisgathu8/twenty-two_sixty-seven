@@ -102,21 +102,17 @@
        :player player
        :penalty? false})))
 
-(defspec valid-records-enriched-with-break-windows-test
+(defspec valid-records-ingested-with-provenance-test
   50
   (prop/for-all [valid-record valid-fbref-gen]
     (let [out (pipeline/parse-and-validate-records :source/fbref [valid-record])]
       (and (= 1 (count out))
-           (let [event (first out)
-                 m (:event/minute event)]
-             (and (s/valid? ::ingest-spec/enriched-event event)
+           (let [event (first out)]
+             (and (s/valid? ::ingest-spec/ingested-event event)
                   (= :source/fbref (:event/source event))
                   (some? (:event/ingested-at event))
-                  ;; Verify window classification logic
-                  (cond
-                    (<= 17 m 27) (= :break-window/first-half-22 (:event/break-window event))
-                    (<= 62 m 72) (= :break-window/second-half-67 (:event/break-window event))
-                    :else (nil? (:event/break-window event)))))))))
+                  ;; Rule engine owns window semantics, not ingest
+                  (nil? (:event/break-window event))))))))
 
 ;; ============================================================================
 ;; 2. End-to-End Real Fixture Ingestion & Traceability
@@ -186,8 +182,8 @@
           (is (every? #(= :source/fbref (:event/source %)) all-events))
           (is (every? #(some? (:event/ingested-at %)) all-events))))
 
-      ;; 3. Verify break-window event queryability
-      (testing "Break window queries retrieve exact enriched events"
+      ;; 3. Verify temporal queryability without hardcoded window tags in ingest
+      (testing "Temporal range queries retrieve raw events; rules evaluate windows dynamically"
         (let [db (store-query/db-at *node*)
               ;; 22' break window (minutes 17 to 27)
               break-22-events (store-query/find-events-in-window db "M42" 17 27)
@@ -199,9 +195,9 @@
           (is (= 2 (count break-22-events))) ; 21' shot, 23' sub
           (is (some? sub-22))
           (is (= {:player-off "Griezmann" :player-on "Thuram"} (:event/detail sub-22)))
-          (is (= :break-window/first-half-22 (:event/break-window sub-22)))
+          (is (nil? (:event/break-window sub-22))) ; Ingest does not hardcode break-window
 
           (is (= 1 (count break-67-events))) ; 67' sub
           (is (some? sub-67))
           (is (= {:player-off "Rabiot" :player-on "Camavinga"} (:event/detail sub-67)))
-          (is (= :break-window/second-half-67 (:event/break-window sub-67))))))))
+          (is (nil? (:event/break-window sub-67))))))))

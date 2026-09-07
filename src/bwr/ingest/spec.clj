@@ -27,14 +27,12 @@
 (s/def ::match-event
   :bwr.store.schema/event)
 
-;; Enriched match event (carries break-window classification and ingestion metadata)
-(s/def :event/break-window (s/nilable #{:break-window/first-half-22 :break-window/second-half-67}))
+;; Ingestion metadata
 (s/def :event/ingested-at inst?)
 
-(s/def ::enriched-event
+(s/def ::ingested-event
   (s/merge ::match-event
-           (s/keys :req [:event/ingested-at]
-                   :opt [:event/break-window])))
+           (s/keys :req [:event/ingested-at])))
 
 (defn valid-event?
   "Returns true if the parsed record conforms to ::match-event."

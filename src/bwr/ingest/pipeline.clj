@@ -2,6 +2,7 @@
   "Transducer-based, spec-validated match event ingestion pipeline (§6).
    Enforces boundary contracts: parse -> spec-validate -> window-enrich -> tag-provenance -> store."
   (:require [clojure.spec.alpha :as s]
+            [clojure.tools.logging :as log]
             [bwr.ingest.spec :as spec]
             [bwr.ingest.sources.core :as sources]
             [bwr.ingest.sources.fbref]
@@ -10,26 +11,8 @@
 (set! *warn-on-reflection* true)
 
 ;; ============================================================================
-;; Enrichment & Provenance
+;; Provenance Tagging
 ;; ============================================================================
-
-(defn enrich-with-stoppage-window
-  "Enriches a valid match event with break-window classification.
-   FIFA hydration breaks occur at clock-minutes 22' and 67' (±300s / ±5 minutes):
-     17-27 -> :break-window/first-half-22
-     62-72 -> :break-window/second-half-67
-   Otherwise nil."
-  [event]
-  (let [m (:event/minute event)]
-    (cond
-      (and (number? m) (<= 17 m 27))
-      (assoc event :event/break-window :break-window/first-half-22)
-
-      (and (number? m) (<= 62 m 72))
-      (assoc event :event/break-window :break-window/second-half-67)
-
-      :else
-      (assoc event :event/break-window nil))))
 
 (defn tag-provenance
   "Tags match event with ingestion timestamp and verified provenance."
@@ -41,14 +24,17 @@
 ;; ============================================================================
 
 (defn default-reject-handler
-  "Default rejection handler for malformed records caught at the ingestion boundary."
-  [raw-record explain-data]
-  ;; In production, can route to security/ops audit trail
-  nil)
+  "Default rejection handler for malformed records caught at the ingestion boundary.
+   Logs structured warning for operator observability."
+  [parsed explain-data]
+  (log/warn "Ingestion rejected malformed record:"
+            {:event/id (:event/id parsed)
+             :event/type (:event/type parsed)
+             :problems (:clojure.spec.alpha/problems explain-data)}))
 
 (defn ingestion-xf
   "Returns a single-pass transducer for the ingestion pipeline:
-     raw-record -> parse -> spec-validate (reject at door) -> enrich-window -> tag-provenance
+     raw-record -> parse -> spec-validate (reject at door) -> tag-provenance
    Optional reject-fn [raw-record explain-data] is invoked for every rejected record."
   ([source]
    (ingestion-xf source default-reject-handler))
@@ -57,8 +43,8 @@
     (map (fn [raw]
            (try
              (sources/parse-record source raw)
-             (catch Exception _
-               {:event/id "parse-error" :event/type nil}))))
+             (catch Exception e
+               {:event/id "parse-error" :event/type nil :parse-error (.getMessage e)}))))
     (filter (fn [parsed]
               (if (s/valid? ::spec/match-event parsed)
                 true
@@ -66,7 +52,6 @@
                   (when (fn? reject-fn)
                     (reject-fn parsed (s/explain-data ::spec/match-event parsed)))
                   false))))
-    (map enrich-with-stoppage-window)
     (map tag-provenance))))
 
 ;; ============================================================================
