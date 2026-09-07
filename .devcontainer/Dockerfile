@@ -1,44 +1,50 @@
 # syntax=docker/dockerfile:1
 FROM debian:bookworm-slim
 
-# Explicitly pin JDK 17 as required by project governance
+# Explicitly pin versions as required by project governance (§4, §12)
 ENV JAVA_VERSION=17 \
     CLOJURE_VERSION=1.12.0.1488 \
+    CADDY_VERSION=2.8.4 \
+    MAILPIT_VERSION=1.31.1 \
     DEBIAN_FRONTEND=noninteractive
 
+# System dependencies from Debian 12 Bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-17-jdk-headless \
     curl \
     git \
-    gnupg \
     ca-certificates \
-    apt-transport-https \
-    debian-keyring \
-    debian-archive-keyring \
     libnss3-tools \
     procps \
     rlwrap \
     sudo \
+    tar \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Clojure CLI
+# Install Clojure CLI (pinned to 1.12.0.1488)
 RUN curl -fsSL -O https://download.clojure.org/install/linux-install-${CLOJURE_VERSION}.sh \
     && chmod +x linux-install-${CLOJURE_VERSION}.sh \
     && ./linux-install-${CLOJURE_VERSION}.sh \
     && rm linux-install-${CLOJURE_VERSION}.sh
 
-# Install Caddy
-RUN curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
-    && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list \
-    && apt-get update && apt-get install -y caddy \
-    && rm -rf /var/lib/apt/lists/*
+# Install Caddy (pinned to v2.8.4 release deb; no external unpinned repo)
+RUN ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL -O "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${ARCH}.deb" \
+    && dpkg -i "caddy_${CADDY_VERSION}_linux_${ARCH}.deb" \
+    && rm "caddy_${CADDY_VERSION}_linux_${ARCH}.deb"
 
-# Install Mailpit
-RUN curl -sL https://raw.githubusercontent.com/axllent/mailpit/develop/install.sh | bash
+# Install Mailpit (pinned to v1.31.1 release binary; direct archive download without GitHub API rate limits)
+RUN ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL -O "https://github.com/axllent/mailpit/releases/download/v${MAILPIT_VERSION}/mailpit-linux-${ARCH}.tar.gz" \
+    && tar -xzf "mailpit-linux-${ARCH}.tar.gz" -C /usr/local/bin mailpit \
+    && rm "mailpit-linux-${ARCH}.tar.gz" \
+    && chmod +x /usr/local/bin/mailpit
 
-# Create non-root developer user
+# Create non-root developer user (UID 1000) and initialize workspace directory permissions
 RUN useradd -m -s /bin/bash -u 1000 developer \
-    && echo "developer ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+    && echo "developer ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers \
+    && mkdir -p /workspace \
+    && chown -R developer:developer /workspace
 
 USER developer
 WORKDIR /workspace
