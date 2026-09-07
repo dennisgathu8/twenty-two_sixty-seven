@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     gnupg \
     ca-certificates \
+    apt-transport-https \
+    debian-keyring \
+    debian-archive-keyring \
     libnss3-tools \
     procps \
     rlwrap \

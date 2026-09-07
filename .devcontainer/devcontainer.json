@@ -26,6 +26,6 @@
       }
     }
   },
-  "forwardPorts": [3000, 8025],
+  "forwardPorts": [3000, 8025, 80, 443],
   "postCreateCommand": "sudo caddy start --config .devcontainer/Caddyfile"
 }

@@ -71,30 +71,81 @@
       (is (true? (schema/valid-entity? rule)))
       (is (true? (schema/valid-entity? rec)))))
 
-  (testing "Malformed entities are rejected at schema validation"
-    ;; Invalid event: negative minute and missing source
-    (is (false? (schema/valid-entity? {:event/id "e1"
-                                       :event/match "M1"
-                                       :event/type :event.type/shot
-                                       :event/minute -5
-                                       :event/team "France"
-                                       :event/detail {}})))
-    ;; Invalid recommendation: empty evidence collection is strictly disallowed
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Document failed schema validation"
-                          (schema/validate-entity!
-                           {:recommendation/id "rec-bad"
-                            :recommendation/match "M42"
-                            :recommendation/stoppage "M42-break-1"
-                            :recommendation/rule :rule/test
-                            :recommendation/rule-version "1.0.0"
-                            :recommendation/team "France"
-                            :recommendation/text "Bad rec"
-                            :recommendation/evidence [] ;; must not be empty!
-                            :recommendation/generated-at #inst "2026-06-22T10:04:11Z"
-                            :recommendation/tx 100})))))
+;; ============================================================================
+;; 2. Transact Boundary & Negative-Path Spec Rejection Tests
+;; ============================================================================
+
+(deftest transact-spec-rejection-test
+  (testing "transact! rejects recommendation with empty evidence and does NOT write to store"
+    (let [invalid-rec {:recommendation/id "M42-rec-empty-evidence"
+                       :recommendation/match "M42"
+                       :recommendation/stoppage "M42-break-1"
+                       :recommendation/rule :rule/break-window-substitution-pattern
+                       :recommendation/rule-version "1.0.0"
+                       :recommendation/team "France"
+                       :recommendation/text "France made substitution inside break window."
+                       :recommendation/evidence [] ;; EMPTY EVIDENCE - strictly forbidden!
+                       :recommendation/generated-at #inst "2026-06-22T10:04:11Z"
+                       :recommendation/tx 10}]
+      ;; 1. Assert spec rejects it
+      (is (false? (schema/valid-entity? invalid-rec)))
+
+      ;; 2. Assert transact! throws ex-info citing schema validation failure
+      (let [ex (is (thrown? clojure.lang.ExceptionInfo
+                            (query/transact! *node* [invalid-rec])))]
+        (is (re-find #"Document failed schema validation for :bwr.store.schema/recommendation"
+                     (ex-message ex))))
+
+      ;; 3. Assert document was rejected at the door and NEVER reached XTDB
+      (let [db (query/db-at *node*)]
+        (is (nil? (query/entity db "M42-rec-empty-evidence"))))))
+
+  (testing "transact! rejects stoppage with missing clock-minute and does NOT write to store"
+    (let [invalid-stoppage {:stoppage/id "M42-stoppage-missing-minute"
+                            :stoppage/match "M42"
+                            :stoppage/type :stoppage.type/hydration
+                            :stoppage/half 1
+                            ;; :stoppage/clock-minute is intentionally omitted
+                            :stoppage/duration-s 180}]
+      ;; 1. Assert spec rejects it
+      (is (false? (schema/valid-entity? invalid-stoppage)))
+
+      ;; 2. Assert transact! throws ex-info citing schema validation failure
+      (let [ex (is (thrown? clojure.lang.ExceptionInfo
+                            (query/transact! *node* [invalid-stoppage])))]
+        (is (re-find #"Document failed schema validation for :bwr.store.schema/stoppage"
+                     (ex-message ex))))
+
+      ;; 3. Assert document was rejected before reaching the store
+      (let [db (query/db-at *node*)]
+        (is (nil? (query/entity db "M42-stoppage-missing-minute"))))))
+
+  (testing "transact! rejects batch if ANY entity is invalid (atomic validation at door)"
+    (let [valid-match {:match/id "M99"
+                       :match/tournament "wc2026"
+                       :match/home-team "Spain"
+                       :match/away-team "Brazil"
+                       :match/kickoff #inst "2026-06-25T18:00:00Z"
+                       :match/venue "MetLife Stadium"
+                       :match/data-source :source/fbref
+                       :match/data-quality :quality/verified}
+          invalid-event {:event/id "evt-bad"
+                         :event/match "M99"
+                         :event/type :event.type/substitution
+                         :event/minute -10 ;; NEGATIVE MINUTE - invalid
+                         :event/team "Spain"
+                         :event/detail {}
+                         :event/source :source/fbref}]
+      ;; Transact batch containing one valid and one invalid document
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (query/transact! *node* [valid-match invalid-event])))
+      ;; Neither document should have reached the store
+      (let [db (query/db-at *node*)]
+        (is (nil? (query/entity db "M99")))
+        (is (nil? (query/entity db "evt-bad"))))))))
 
 ;; ============================================================================
-;; 2. Basic Storage & Datalog Queries
+;; 3. Basic Storage & Datalog Queries
 ;; ============================================================================
 
 (deftest store-and-datalog-queries-test
