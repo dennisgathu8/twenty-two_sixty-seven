@@ -1,0 +1,31 @@
+{
+  "name": "Break-Window Response (Debian 12 + JDK 17)",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "betterthantomorrow.calva",
+        "redhat.java",
+        "vscjava.vscode-java-debug"
+      ],
+      "settings": {
+        "calva.replConnectSequences": [
+          {
+            "name": "BWR nREPL",
+            "projectType": "deps.edn",
+            "afterCLJReplJackInCode": "(bwr.main/start!)",
+            "cljsType": "none",
+            "menuSelections": {
+              "cljAliases": ["dev", "test"]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "forwardPorts": [3000, 8025],
+  "postCreateCommand": "sudo caddy start --config .devcontainer/Caddyfile"
+}

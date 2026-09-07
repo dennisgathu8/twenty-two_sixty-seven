@@ -1,0 +1,8 @@
+{
+    local_certs
+}
+
+breakwindow.lan {
+    reverse_proxy localhost:3000
+    tls internal
+}
