@@ -1,0 +1,270 @@
+(ns bwr.web.views.matches
+  "Server-rendered HTML views for match reports and stoppage detail pages (§8).
+   Implements auditable evidence drilldown linking recommendations directly
+   to immutable event entities in the store."
+  (:require [clojure.string :as str]
+            [bwr.web.views.layout :as layout]))
+
+(set! *warn-on-reflection* true)
+
+;; ============================================================================
+;; Formatting Helpers
+;; ============================================================================
+
+(defn- format-inst
+  "Formats a java.util.Date or java.time.Instant into an ISO-like UTC string."
+  [inst]
+  (cond
+    (nil? inst) "N/A"
+    (instance? java.util.Date inst) (str (.toInstant ^java.util.Date inst))
+    :else (str inst)))
+
+(defn- format-event-detail
+  "Formats event detail map into human-readable description."
+  [event-type detail]
+  (cond
+    (nil? detail) "—"
+    (= event-type :event.type/substitution)
+    (let [po (:player-off detail)
+          pi (:player-on detail)]
+      (if (and po pi)
+        (str "Off: " po " → On: " pi)
+        (pr-str detail)))
+
+    (= event-type :event.type/shot)
+    (let [p (:player detail)
+          outcome (:outcome detail)]
+      (if (and p outcome)
+        (str p " (" outcome ")")
+        (pr-str detail)))
+
+    (= event-type :event.type/goal)
+    (let [scorer (:scorer detail)]
+      (if scorer (str "Goal by " scorer) (pr-str detail)))
+
+    (= event-type :event.type/card)
+    (let [player (:player detail)
+          card (:card-type detail)]
+      (if (and player card)
+        (str card " card: " player)
+        (pr-str detail)))
+
+    :else (pr-str detail)))
+
+;; ============================================================================
+;; Match Report View (GET /matches/:id)
+;; ============================================================================
+
+(defn match-report-view
+  "Renders the full match report SSR view for a given match.
+   Displays match metadata, scheduled stoppages, break-window recommendations,
+   and the full event timeline with anchor links."
+  [{:keys [match stoppages events recommendations]}]
+  (let [match-id (:match/id match)
+        home-team (:match/home-team match)
+        away-team (:match/away-team match)
+        match-title (str home-team " vs " away-team)
+        quality (:match/data-quality match)
+        verified? (= :quality/verified quality)
+        json-ld {"@context" "https://schema.org"
+                 "@type" "SportsEvent"
+                 "name" match-title
+                 "identifier" match-id
+                 "startDate" (format-inst (:match/kickoff match))
+                 "location" {"@type" "Place" "name" (:match/venue match)}
+                 "homeTeam" {"@type" "SportsTeam" "name" home-team}
+                 "awayTeam" {"@type" "SportsTeam" "name" away-team}}]
+    (layout/base-layout
+     {:title (str match-title " — Match Report")
+      :description (str "Break-window response analysis for " match-title " at " (:match/venue match))
+      :og-type "article"
+      :canonical-url (str "/matches/" match-id)
+      :json-ld json-ld}
+
+     [:div.breadcrumb
+      [:a {:href "/"} "← All Matches"]]
+
+     ;; Match Header Card
+     [:div.card.match-header
+      [:h1 match-title]
+      [:div.match-meta
+       [:span [:strong "Tournament: "] (:match/tournament match)]
+       [:span [:strong "Kickoff: "] (format-inst (:match/kickoff match))]
+       [:span [:strong "Venue: "] (:match/venue match)]
+       [:span [:strong "Source: "] (name (or (:match/data-source match) :unknown))]
+       [:span
+        (if verified?
+          [:span.badge.badge-verified "Verified Data"]
+          [:span.badge.badge-unverified "Unverified Data"])]]]
+
+     ;; Scheduled Stoppages Section
+     [:div.card
+      [:h2.section-title "Scheduled Break Windows"]
+      [:p.section-desc
+       "Hydration breaks are scheduled at 22' and 67'. Click on any break window to drill into rule evaluations and evidence trails."]
+      (if (empty? stoppages)
+        [:p "No scheduled stoppages recorded for this match."]
+        [:table.data-table
+         [:thead
+          [:tr
+           [:th "Break Window"]
+           [:th "Half"]
+           [:th "Clock Minute"]
+           [:th "Duration"]
+           [:th "Type"]
+           [:th "Analysis"]]]
+         [:tbody
+          (for [s stoppages
+                :let [sid (:stoppage/id s)]]
+            [:tr
+             [:td [:span.code-id sid]]
+             [:td (str "Half " (:stoppage/half s))]
+             [:td [:span.badge.badge-break (str (:stoppage/clock-minute s) "'")]]
+             [:td (str (:stoppage/duration-s s) "s")]
+             [:td (name (:stoppage/type s))]
+             [:td [:a {:href (str "/matches/" match-id "/stoppages/" sid)}
+                   "View Stoppage & Evidence →"]]])]])]
+
+     ;; Recommendations Section
+     [:div.card
+      [:h2.section-title "Break-Window Recommendations"]
+      [:p.section-desc
+       "Auditable decision support generated by declarative core.logic rules (§7). Every recommendation includes a verified evidence trail."]
+      (if (empty? recommendations)
+        [:p "No recommendations triggered for this match."]
+        [:div
+         (for [rec recommendations
+               :let [sid (:recommendation/stoppage rec)
+                     team (:recommendation/team rec)
+                     evidence (:recommendation/evidence rec)]]
+           [:div.recommendation-box
+            [:div.recommendation-title
+             [:a {:href (str "/teams/" team "/break-profile")} team]
+             " — Break Window Response"]
+            [:div.recommendation-rule
+             (str "Rule: " (name (:recommendation/rule rec)) " (v" (:recommendation/rule-version rec) ")")]
+            [:div.recommendation-text (:recommendation/text rec)]
+            [:div.evidence-trail
+             [:strong "Evidence Trail: "]
+             (for [eid evidence]
+               [:span.evidence-item {:key eid}
+                [:a.code-id {:href (str "/matches/" match-id "/stoppages/" sid "#evt-" eid)}
+                 eid]])
+             [:span.drilldown-link
+              [:a {:href (str "/matches/" match-id "/stoppages/" sid)}
+               "Drill down into evidence →"]]]])])]
+
+     ;; Full Match Events Timeline
+     [:div.card
+      [:h2.section-title "Match Events Timeline"]
+      [:p.section-desc
+       "All verified discrete match events recorded in XTDB storage. Evidence links point directly to these entity records."]
+      (if (empty? events)
+        [:p "No events recorded for this match."]
+        [:table.data-table
+         [:thead
+          [:tr
+           [:th "Min"]
+           [:th "Event ID"]
+           [:th "Team"]
+           [:th "Type"]
+           [:th "Detail"]
+           [:th "Source"]]]
+         [:tbody
+          (for [evt events
+                :let [eid (:event/id evt)
+                      etype (:event/type evt)]]
+            [:tr {:id (str "evt-" eid)}
+             [:td [:strong (str (:event/minute evt) "'")]]
+             [:td [:span.code-id eid]]
+             [:td (:event/team evt)]
+             [:td (name etype)]
+             [:td (format-event-detail etype (:event/detail evt))]
+             [:td (name (:event/source evt))]])]])])))
+
+;; ============================================================================
+;; Stoppage Detail View (GET /matches/:id/stoppages/:sid)
+;; ============================================================================
+
+(defn stoppage-detail-view
+  "Renders the stoppage detail SSR view with auditable evidence drilldown.
+   Resolves recommendation evidence entity IDs against the store and displays
+   exact underlying facts (minute, player off/on, source) in clickable form."
+  [{:keys [match stoppage recommendations evidence-entities]}]
+  (let [match-id (:match/id match)
+        sid (:stoppage/id stoppage)
+        clock-min (:stoppage/clock-minute stoppage)
+        home-team (:match/home-team match)
+        away-team (:match/away-team match)
+        page-title (str clock-min "' Break Window Detail — " home-team " vs " away-team)]
+    (layout/base-layout
+     {:title page-title
+      :description (str "Evidence drilldown for " clock-min "' stoppage in " home-team " vs " away-team)
+      :og-type "article"
+      :canonical-url (str "/matches/" match-id "/stoppages/" sid)}
+
+     [:div.breadcrumb
+      [:a {:href (str "/matches/" match-id)} (str "← Back to " home-team " vs " away-team " Report")]]
+
+     ;; Stoppage Metadata Header
+     [:div.card
+      [:h1 (str clock-min "' Hydration Break Window")]
+      [:div.match-meta
+       [:span [:strong "Match: "]
+        [:a {:href (str "/matches/" match-id)} (str home-team " vs " away-team)]]
+       [:span [:strong "Half: "] (str "Half " (:stoppage/half stoppage))]
+       [:span [:strong "Scheduled Minute: "] (str clock-min "'")]
+       [:span [:strong "Duration: "] (str (:stoppage/duration-s stoppage) "s")]
+       [:span [:strong "Type: "] (name (:stoppage/type stoppage))]]]
+
+     ;; Recommendations for this Stoppage
+     [:div.card
+      [:h2.section-title "Recommendations for this Stoppage"]
+      (if (empty? recommendations)
+        [:p "No rule recommendations fired for this stoppage."]
+        [:div
+         (for [rec recommendations
+               :let [team (:recommendation/team rec)
+                     evidence (:recommendation/evidence rec)]]
+           [:div.recommendation-box {:key (:recommendation/id rec)}
+            [:div.recommendation-title
+             [:a {:href (str "/teams/" team "/break-profile")} team]
+             " — Break Window Response"]
+            [:div.recommendation-rule
+             (str "Rule: " (name (:recommendation/rule rec)) " (v" (:recommendation/rule-version rec) ")")]
+            [:div.recommendation-text (:recommendation/text rec)]
+            [:div.evidence-trail
+             [:strong "Evidence Entity IDs: "]
+             (for [eid evidence]
+               [:span.evidence-item {:key eid}
+                [:a.code-id {:href (str "#evt-" eid)} eid]])]])])]
+
+     ;; Auditable Evidence Trail (Drilldown)
+     [:div.card
+      [:h2.section-title "Auditable Evidence Trail"]
+      [:p.section-desc
+       "The exact underlying store entities that satisfied rule logic (§1.1, §7). Every entity is auditable down to minute and source."]
+      (if (empty? evidence-entities)
+        [:p "No evidence entities found in store."]
+        [:table.data-table
+         [:thead
+          [:tr
+           [:th "Event ID"]
+           [:th "Minute"]
+           [:th "Team"]
+           [:th "Type"]
+           [:th "Detail"]
+           [:th "Source"]
+           [:th "Audit Status"]]]
+         [:tbody
+          (for [evt evidence-entities
+                :let [eid (:event/id evt)
+                      etype (:event/type evt)]]
+            [:tr {:id (str "evt-" eid)}
+             [:td [:span.code-id eid]]
+             [:td [:strong (str (:event/minute evt) "'")]]
+             [:td (:event/team evt)]
+             [:td (name etype)]
+             [:td (format-event-detail etype (:event/detail evt))]
+             [:td (name (:event/source evt))]
+             [:td [:span.badge.badge-verified "Store Fact Verified"]]])]])])))

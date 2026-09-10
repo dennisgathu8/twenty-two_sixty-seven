@@ -2,69 +2,59 @@
   "Main application entry point and system lifecycle management for Break-Window Response.
    Provides (start!), (stop!), and (restart!) for REPL-driven development and -main for CLI."
   (:require [org.httpkit.server :as http]
-            [ring.middleware.defaults :refer [wrap-defaults site-defaults]]
-            [ring.util.response :as response])
+            [bwr.store.node :as store-node]
+            [bwr.web.routes :as routes])
   (:gen-class))
 
 (set! *warn-on-reflection* true)
 
 (defonce ^:private system
   (atom {:server nil
+         :node nil
          :started-at nil}))
 
-(defn- default-handler
-  "Default root HTTP handler for the skeleton application."
-  [request]
-  (case (:uri request)
-    "/" (-> (response/response
-              (str "<!DOCTYPE html>\n"
-                   "<html lang=\"en\">\n"
-                   "<head><meta charset=\"utf-8\"><title>Break-Window Response</title></head>\n"
-                   "<body style=\"font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem;\">\n"
-                   "  <h1>Break-Window Response</h1>\n"
-                   "  <p>Decision support for FIFA 2026 mandatory hydration breaks (22' & 67').</p>\n"
-                   "  <p>Status: <strong>Online</strong> (Parens to Production / Clojure / XTDB / core.logic)</p>\n"
-                   "</body>\n"
-                   "</html>"))
-            (response/content-type "text/html; charset=utf-8"))
-    "/health" (-> (response/response "{:status :ok :service :break-window-response}")
-                  (response/content-type "application/edn"))
-    (response/not-found "Not Found")))
-
-(defn- app-handler
-  "Ring application handler wrapped with basic defaults."
-  []
-  (wrap-defaults default-handler site-defaults))
-
 (defn start-server!
-  "Starts the http-kit web server on the given port (default: 3000).
+  "Starts the http-kit web server on the given port (default: 3000) using the given XTDB node.
    Returns the stop-server function."
-  ([] (start-server! 3000))
-  ([port]
+  ([node] (start-server! node 3000))
+  ([node port]
    (println (str "Starting Break-Window Response server on port " port "..."))
-   (http/run-server (app-handler) {:port port})))
+   (let [app (routes/create-app node)]
+     (http/run-server app {:port port}))))
 
 (defn start!
-  "Starts the system lifecycle: starts web server on port 3000 and records state.
-   Safe to call repeatedly; will not start a duplicate server if one is already running."
-  []
-  (if (:server @system)
-    (println "System is already running on port 3000.")
-    (let [stop-fn (start-server! 3000)]
-      (reset! system {:server stop-fn
-                      :started-at (java.time.Instant/now)})
-      (println "Break-Window Response system started successfully.")
-      (println "HTTP server listening at http://localhost:3000 and https://breakwindow.lan")
-      :started)))
+  "Starts the system lifecycle: starts XTDB node, starts web server on port 3000,
+   and records system state. Safe to call repeatedly; will not duplicate running services."
+  ([] (start! {:port 3000 :topology :in-memory}))
+  ([opts]
+   (if (:server @system)
+     (do
+       (println (str "System is already running on port " (get opts :port 3000) "."))
+       :already-running)
+     (let [port (get opts :port 3000)
+           topology (get opts :topology :in-memory)
+           data-dir (get opts :data-dir "data/xtdb")
+           node (store-node/start-node! (if (= topology :rocksdb)
+                                          {:topology :rocksdb :data-dir data-dir}
+                                          {:topology :in-memory}))
+           stop-fn (start-server! node port)]
+       (reset! system {:server stop-fn
+                       :node node
+                       :started-at (java.time.Instant/now)})
+       (println "Break-Window Response system started successfully.")
+       (println (str "HTTP server listening at http://localhost:" port " and https://breakwindow.lan"))
+       :started))))
 
 (defn stop!
-  "Stops the running system and web server gracefully."
+  "Stops the running system, web server, and XTDB node gracefully."
   []
   (if-let [stop-fn (:server @system)]
     (do
       (println "Stopping Break-Window Response server...")
       (stop-fn :timeout 100)
-      (reset! system {:server nil :started-at nil})
+      (when-let [node (:node @system)]
+        (store-node/stop-node! node))
+      (reset! system {:server nil :node nil :started-at nil})
       (println "Break-Window Response system stopped.")
       :stopped)
     (do
@@ -73,9 +63,10 @@
 
 (defn restart!
   "Restarts the system lifecycle by stopping and then starting."
-  []
-  (stop!)
-  (start!))
+  ([] (restart! {:port 3000 :topology :in-memory}))
+  ([opts]
+   (stop!)
+   (start! opts)))
 
 (defn system-status
   "Returns current system status map."
@@ -86,7 +77,7 @@
 (defn -main
   "CLI entry point for running the application standalone."
   [& _args]
-  (start!)
+  (start! {:port 3000 :topology :rocksdb :data-dir "data/xtdb"})
   (println "Press Ctrl+C to stop.")
   (.addShutdownHook (Runtime/getRuntime)
                     (Thread. ^Runnable (fn [] (stop!)))))

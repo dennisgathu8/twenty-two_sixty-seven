@@ -94,6 +94,16 @@
   [db match-id]
   (entity db match-id))
 
+(defn find-all-matches
+  "Returns all match entities in the store, ordered by kickoff time."
+  [db]
+  (let [results (xt/q db
+                      '{:find [(pull ?m [*])]
+                        :where [[?m :match/id _]]})]
+    (->> results
+         (mapv first)
+         (sort-by :match/kickoff))))
+
 (defn find-matches-by-tournament
   "Returns all matches for a given tournament ID."
   [db tournament-id]
@@ -103,6 +113,18 @@
                         :where [[?m :match/tournament ?tid]]}
                       tournament-id)]
     (mapv first results)))
+
+(defn find-events-by-match
+  "Returns all events for a given match ID, ordered by minute."
+  [db match-id]
+  (let [results (xt/q db
+                      '{:find [(pull ?e [*])]
+                        :in [?mid]
+                        :where [[?e :event/match ?mid]]}
+                      match-id)]
+    (->> results
+         (mapv first)
+         (sort-by :event/minute))))
 
 (defn find-stoppages-by-match
   "Returns all stoppages for a given match ID, ordered by half and clock minute."
