@@ -129,6 +129,69 @@
                 :recommendation/tx]
           :opt [:xt/id]))
 
+;; 7. Authentication Token (Single-Use Magic Link) (§9.2)
+(s/def :token/id string?)
+(s/def :token/jti string?)
+(s/def :token/identity string?)
+(s/def :token/issued-at inst?)
+(s/def :token/expires-at inst?)
+(s/def :token/consumed? boolean?)
+(s/def :token/consumed-at (s/nilable inst?))
+
+(s/def ::auth-token
+  (s/keys :req [:token/id
+                :token/jti
+                :token/identity
+                :token/issued-at
+                :token/expires-at
+                :token/consumed?]
+          :opt [:xt/id
+                :token/consumed-at]))
+
+;; 8. Security Event Audit Trail (§2.4, §9.4)
+(s/def :sec-event/id string?)
+(s/def :sec-event/type keyword?)
+(s/def :sec-event/identity (s/nilable string?))
+(s/def :sec-event/client-ip string?)
+(s/def :sec-event/timestamp inst?)
+(s/def :sec-event/status #{:status/success :status/failure})
+(s/def :sec-event/reason (s/nilable keyword?))
+(s/def :sec-event/detail map?)
+
+(s/def ::security-event
+  (s/keys :req [:sec-event/id
+                :sec-event/type
+                :sec-event/client-ip
+                :sec-event/timestamp
+                :sec-event/status
+                :sec-event/detail]
+          :opt [:xt/id
+                :sec-event/identity
+                :sec-event/reason]))
+
+;; 9. Authenticated Sessions (§9.2, §9.4)
+(s/def :session/id string?)
+(s/def :session/token string?)
+(s/def :session/identity string?)
+(s/def :session/created-at inst?)
+(s/def :session/expires-at inst?)
+(s/def :session/revoked? boolean?)
+(s/def :session/revoked-at (s/nilable inst?))
+(s/def :session/client-ip (s/nilable string?))
+(s/def :session/user-agent (s/nilable string?))
+
+(s/def ::session
+  (s/keys :req [:session/id
+                :session/token
+                :session/identity
+                :session/created-at
+                :session/expires-at
+                :session/revoked?]
+          :opt [:xt/id
+                :session/revoked-at
+                :session/client-ip
+                :session/user-agent]))
+
 ;; ============================================================================
 ;; Helper Utilities
 ;; ============================================================================
@@ -143,6 +206,9 @@
     (:event/id doc)          ::event
     (:rule/id doc)           ::rule
     (:recommendation/id doc) ::recommendation
+    (:token/id doc)          ::auth-token
+    (:sec-event/id doc)      ::security-event
+    (:session/id doc)        ::session
     :else nil))
 
 (defn entity-id
@@ -154,7 +220,10 @@
       (:stoppage/id doc)
       (:event/id doc)
       (:rule/id doc)
-      (:recommendation/id doc)))
+      (:recommendation/id doc)
+      (:token/id doc)
+      (:sec-event/id doc)
+      (:session/id doc)))
 
 (defn ensure-xt-id
   "Ensures document map has an :xt/id key matching its entity id."

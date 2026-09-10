@@ -7,7 +7,8 @@
             [hiccup.core :as h]
             [hiccup.page :as hp]
             [hiccup.util :as hu]
-            [ring.util.response :as resp]))
+            [ring.util.response :as resp]
+            [bwr.security.middleware :as sec]))
 
 (set! *warn-on-reflection* true)
 
@@ -16,24 +17,12 @@
 ;; ============================================================================
 
 (def csp-policy
-  "Strict Content-Security-Policy denying inline script and inline styles by default (§9.3)."
-  (str "default-src 'self'; "
-       "script-src 'self'; "
-       "style-src 'self'; "
-       "img-src 'self' data:; "
-       "font-src 'self'; "
-       "connect-src 'self'; "
-       "frame-ancestors 'none'; "
-       "base-uri 'self'; "
-       "form-action 'self'"))
+  "Strict Content-Security-Policy delegated to bwr.security.middleware."
+  sec/csp-policy)
 
 (def security-headers
-  "Standard security response headers to accompany every HTTP response (§9)."
-  {"Content-Security-Policy" csp-policy
-   "X-Content-Type-Options" "nosniff"
-   "X-Frame-Options" "DENY"
-   "Referrer-Policy" "strict-origin-when-cross-origin"
-   "Permissions-Policy" "camera=(), microphone=(), geolocation=()"})
+  "Standard security response headers delegated to bwr.security.middleware."
+  sec/security-headers)
 
 (defn compute-sri-hash
   "Computes a Subresource Integrity (SRI) sha384 hash string for text or byte content."

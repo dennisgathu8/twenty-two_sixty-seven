@@ -172,3 +172,36 @@
                         :where [[?r :recommendation/team ?team]]}
                       team-name)]
     (mapv first results)))
+
+;; ============================================================================
+;; Security Event Audit Trail Queries (§2.4, §9.4)
+;; ============================================================================
+
+(defn log-security-event!
+  "Logs a validated security event into XTDB storage (§2.4).
+   Awaits transaction completion."
+  [node event-map]
+  (let [evt-id (or (:sec-event/id event-map) (str "sec-evt-" (java.util.UUID/randomUUID)))
+        full-evt (assoc event-map
+                        :sec-event/id evt-id
+                        :sec-event/timestamp (or (:sec-event/timestamp event-map) (java.util.Date.)))
+        validated (schema/validate-entity! full-evt)]
+    (transact! node [validated])
+    validated))
+
+(defn find-security-events
+  "Queries security audit trail events from XTDB snapshot.
+   Opts can optionally include:
+     :type     - filter by keyword event type (e.g. :sec.type/magic-link-generated)
+     :identity - filter by identity string"
+  ([db] (find-security-events db {}))
+  ([db opts]
+   (let [results (xt/q db
+                       '{:find [(pull ?e [*])]
+                         :where [[?e :sec-event/id _]]})
+         events (->> results
+                     (mapv first)
+                     (sort-by :sec-event/timestamp #(compare %2 %1)))]
+     (cond->> events
+       (:type opts) (filterv #(= (:sec-event/type %) (:type opts)))
+       (:identity opts) (filterv #(= (:sec-event/identity %) (:identity opts)))))))

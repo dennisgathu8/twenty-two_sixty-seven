@@ -26,3 +26,8 @@ data/
 .env.*
 !.env.example
 *.log
+
+# Local tools & caches
+bin/
+.clj-cache/
+

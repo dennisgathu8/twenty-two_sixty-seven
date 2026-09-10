@@ -8,6 +8,7 @@
             [reitit.ring.middleware.parameters :as params]
             [ring.util.response :as resp]
             [bwr.store.query :as store-query]
+            [bwr.security.middleware :as sec]
             [bwr.web.views.layout :as layout]
             [bwr.web.views.matches :as matches]
             [bwr.web.views.teams :as teams]))
@@ -210,11 +211,13 @@
   "Creates and returns the Ring application handler for public SSR views."
   [node]
   (let [router (ring/router (create-routes node))]
-    (ring/ring-handler
-     router
-     (ring/create-default-handler
-      {:not-found (fn [_]
-                    (layout/error-response 404 "Not Found" "The requested URL was not found on this server."))
-       :method-not-allowed (fn [_]
-                             (layout/error-response 405 "Method Not Allowed" "HTTP method not supported for this route."))})
-     {:middleware [params/parameters-middleware]})))
+    (-> (ring/ring-handler
+         router
+         (ring/create-default-handler
+          {:not-found (fn [_]
+                        (layout/error-response 404 "Not Found" "The requested URL was not found on this server."))
+           :method-not-allowed (fn [_]
+                                 (layout/error-response 405 "Method Not Allowed" "HTTP method not supported for this route."))})
+         {:middleware [params/parameters-middleware]})
+        (sec/wrap-ip-containment node)
+        sec/wrap-security-headers)))
