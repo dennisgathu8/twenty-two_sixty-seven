@@ -3,9 +3,39 @@
    Supports both live Mailpit SMTP delivery (localhost:1025) and an in-memory
    delivery spool for hermetic, deterministic test verification."
   (:require [clojure.string :as str]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]))
 
 (set! *warn-on-reflection* true)
+
+;; ============================================================================
+;; Email Address & Header Injection Validation (§9.2)
+;; ============================================================================
+
+(def email-regex
+  "Standard RFC 5322 compliant regex for practical email address validation."
+  #"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$")
+
+(s/def ::safe-email
+  (s/and string?
+         #(<= 3 (count %) 254)
+         #(not (re-find #"[\r\n\x00]" %))
+         #(not (re-find #"(?i)%0[ad]" %))
+         #(re-matches email-regex %)))
+
+(defn valid-email?
+  "Returns true if email is well-formed and contains no CRLF or injection characters."
+  [email]
+  (boolean (and (string? email) (s/valid? ::safe-email (str/trim email)))))
+
+(defn validate-email!
+  "Validates email string. Throws ex-info if invalid or contains header injection characters."
+  [email]
+  (if (valid-email? email)
+    (str/trim email)
+    (throw (ex-info "Invalid email address format or header injection characters detected"
+                    {:email email
+                     :reason :reason/invalid-email-format}))))
 
 (defonce ^{:doc "In-memory spool capturing sent emails for test verification and inspection."}
   delivery-spool
@@ -81,9 +111,9 @@
      :smtp-port   - SMTP server port (default: 1025 for Mailpit)"
   ([opts]
    (let [backend (get opts :backend :spool)
-         to (:to opts)
+         to (validate-email! (:to opts))
+         from (validate-email! (get opts :from "noreply@breakwindow.lan"))
          link (:magic-link opts)
-         from (get opts :from "noreply@breakwindow.lan")
          ttl-min (get opts :expires-min 15)
          subject "Your Break-Window Response Access Link"
          body-text (str "Hello,\n\n"

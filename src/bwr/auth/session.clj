@@ -218,24 +218,29 @@
    (get-in request [:headers "x-bwr-session"])))
 
 (defn build-session-cookie
-  "Generates Set-Cookie specification map for a new session."
-  [token opts]
-  {:value token
-   :path "/"
-   :http-only true
-   :same-site :lax
-   :secure (get opts :secure? false)
-   :max-age (long (get opts :ttl-seconds default-session-ttl-seconds))})
+  "Generates Set-Cookie specification map for a new session.
+   Enforces Secure flag by default for HTTPS transport (§4)."
+  ([token] (build-session-cookie token {}))
+  ([token opts]
+   {:value token
+    :path "/"
+    :http-only true
+    :same-site :lax
+    :secure (get opts :secure? true)
+    :max-age (long (get opts :ttl-seconds default-session-ttl-seconds))}))
 
 (defn clear-session-cookie
-  "Generates Set-Cookie specification map to clear/delete the session cookie."
-  []
-  {:value ""
-   :path "/"
-   :http-only true
-   :same-site :lax
-   :max-age 0
-   :expires "Thu, 01 Jan 1970 00:00:00 GMT"})
+  "Generates Set-Cookie specification map to clear/delete the session cookie.
+   Enforces Secure flag by default for HTTPS transport (§4)."
+  ([] (clear-session-cookie {}))
+  ([opts]
+   {:value ""
+    :path "/"
+    :http-only true
+    :same-site :lax
+    :secure (get opts :secure? true)
+    :max-age 0
+    :expires "Thu, 01 Jan 1970 00:00:00 GMT"}))
 
 ;; ============================================================================
 ;; Ring Authentication & Authorization Middleware (§9.2, §9.3)

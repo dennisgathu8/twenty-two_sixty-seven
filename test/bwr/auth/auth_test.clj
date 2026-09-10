@@ -8,6 +8,7 @@
    - Queryable security audit trail logging in XTDB storage (§2.4)."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string :as str]
+            [xtdb.api :as xt]
             [bwr.store.node :as store-node]
             [bwr.store.query :as store-query]
             [bwr.auth.email :as email]
@@ -306,12 +307,13 @@
       (dotimes [_ 2]
         (let [res (magic-link/generate-magic-link!
                    *node*
-                   {:identity "coach1@breakwindow.lan"
+                   {:identity "coach@breakwindow.lan"
                     :secret test-secret
                     :client-ip "172.16.0.10"
                     :ip-limiter ip-limiter
                     :identity-limiter ident-limiter
                     :send-email? false})]
+          (is (true? (:authorized? res)))
           (is (string? (:token res)))))
 
       ;; 3rd request from same IP trips rate limit with HTTP 429
@@ -320,7 +322,7 @@
                      #"Rate limit exceeded for client IP"
                      (magic-link/generate-magic-link!
                       *node*
-                      {:identity "other-coach@breakwindow.lan"
+                      {:identity "analyst@breakwindow.lan"
                        :secret test-secret
                        :client-ip "172.16.0.10"
                        :ip-limiter ip-limiter
@@ -337,4 +339,152 @@
         (is (= 1 (count events)))
         (is (= "172.16.0.10" (:sec-event/client-ip (first events))))
         (is (= :reason/rate-limit-ip (:sec-event/reason (first events))))))))
+
+;; ============================================================================
+;; 7. Identity Authorization Allowlist & Anti-Enumeration (§3, §9.2)
+;; ============================================================================
+
+(deftest identity-authorization-allowlist-test
+  (testing "Identity authorization gate enforces staff allowlist without leaking membership:
+            - Authorized identities receive signed token, XTDB entity, and email
+            - Unauthorized identities get identical success UX message, but NO token, NO email,
+              and distinct :sec.type/unauthorized-magic-link-requested audit log"
+    (try
+      (magic-link/reset-authorized-identities!)
+
+      ;; 1. Authorized identity: coach@breakwindow.lan
+      (let [auth-res (magic-link/generate-magic-link!
+                      *node*
+                      {:identity "coach@breakwindow.lan"
+                       :secret test-secret
+                       :client-ip "10.0.0.1"
+                       :send-email? true})]
+        (is (true? (:authorized? auth-res)))
+        (is (string? (:token auth-res)))
+        (is (some? (:magic-link-url auth-res)))
+        (is (= "If this email is registered to coaching staff, an access link has been sent."
+               (:message auth-res)))
+
+        ;; Verified in XTDB
+        (let [db (store-query/db-at *node*)
+              doc (store-query/entity db (str "token-" (:jti auth-res)))]
+          (is (some? doc))
+          (is (= "coach@breakwindow.lan" (:token/identity doc))))
+
+        ;; Email spooled
+        (is (= 1 (count (email/get-spooled-emails)))))
+
+      ;; 2. Unauthorized identity: intruder@external.org
+      (let [unauth-res (magic-link/generate-magic-link!
+                        *node*
+                        {:identity "intruder@external.org"
+                         :secret test-secret
+                         :client-ip "198.51.100.99"
+                         :send-email? true})]
+        ;; Indistinguishable UX response to prevent user enumeration
+        (is (false? (:authorized? unauth-res)))
+        (is (nil? (:token unauth-res)))
+        (is (nil? (:magic-link-url unauth-res)))
+        (is (nil? (:jti unauth-res)))
+        (is (= "If this email is registered to coaching staff, an access link has been sent."
+               (:message unauth-res)))
+
+        ;; No token document in XTDB for unauthorized email
+        (let [db (store-query/db-at *node*)
+              tokens (xt/q db '{:find [?t] :where [[?t :token/identity "intruder@external.org"]]})]
+          (is (empty? tokens)))
+
+        ;; No email dispatched to unauthorized address (spool count remains 1 from coach above)
+        (is (= 1 (count (email/get-spooled-emails))))
+
+        ;; Distinct security audit event logged for unauthorized attempt
+        (let [db (store-query/db-at *node*)
+              unauth-events (store-query/find-security-events
+                             db
+                             {:type :sec.type/unauthorized-magic-link-requested})]
+          (is (= 1 (count unauth-events)))
+          (let [evt (first unauth-events)]
+            (is (= "intruder@external.org" (:sec-event/identity evt)))
+            (is (= "198.51.100.99" (:sec-event/client-ip evt)))
+            (is (= :status/failure (:sec-event/status evt)))
+            (is (= :reason/unauthorized-identity (:sec-event/reason evt))))))
+
+      ;; 3. Dynamic authorization: authorize new staff email
+      (is (false? (magic-link/authorized-identity? *node* "assistant-analyst@breakwindow.lan")))
+      (magic-link/authorize-identity! "assistant-analyst@breakwindow.lan")
+      (is (true? (magic-link/authorized-identity? *node* "assistant-analyst@breakwindow.lan")))
+
+      (let [new-staff-res (magic-link/generate-magic-link!
+                           *node*
+                           {:identity "assistant-analyst@breakwindow.lan"
+                            :secret test-secret
+                            :send-email? false})]
+        (is (true? (:authorized? new-staff-res)))
+        (is (string? (:token new-staff-res))))
+
+      (finally
+        (magic-link/reset-authorized-identities!)))))
+
+;; ============================================================================
+;; 8. Session Cookie Secure Flag (§4, §9.2)
+;; ============================================================================
+
+(deftest session-cookie-secure-flag-test
+  (testing "Session cookie specification includes Secure flag by default for HTTPS transport"
+    (let [cookie-spec (session/build-session-cookie "test-jwt-token")]
+      (is (= "test-jwt-token" (:value cookie-spec)))
+      (is (= "/" (:path cookie-spec)))
+      (is (true? (:http-only cookie-spec)))
+      (is (= :lax (:same-site cookie-spec)))
+      (is (true? (:secure cookie-spec)) "Cookie MUST have :secure true by default for HTTPS (§4)"))
+
+    (let [clear-spec (session/clear-session-cookie)]
+      (is (= "" (:value clear-spec)))
+      (is (= 0 (:max-age clear-spec)))
+      (is (true? (:secure clear-spec)) "Clear cookie MUST also specify :secure true"))))
+
+;; ============================================================================
+;; 9. SMTP Identity & Header Injection Validation (§9.2)
+;; ============================================================================
+
+(deftest smtp-header-injection-and-syntax-validation-test
+  (testing "Strict email validation rejects CRLF header injection and malformed identities before socket operations"
+    ;; 1. CRLF Injection Attempt: attacker@x.com\r\nBcc:victim@company.com
+    (let [injection-payload "attacker@breakwindow.lan\r\nBcc:everyone@company.com"]
+      (is (false? (email/valid-email? injection-payload)))
+      (let [err (is (thrown-with-msg?
+                     clojure.lang.ExceptionInfo
+                     #"Invalid email address format or header injection characters detected"
+                     (magic-link/generate-magic-link!
+                      *node*
+                      {:identity injection-payload
+                       :secret test-secret
+                       :client-ip "192.168.1.99"
+                       :send-email? true})))]
+        (is (= :reason/invalid-email-format (:reason (ex-data err)))))
+
+      ;; Proves rejected at boundary before email spool or socket
+      (is (empty? (email/get-spooled-emails)))
+
+      ;; Security event was logged in XTDB for the injection attempt
+      (let [db (store-query/db-at *node*)
+            events (store-query/find-security-events db {:type :sec.type/magic-link-rejected})]
+        (is (= 1 (count events)))
+        (is (= :reason/invalid-email-format (:sec-event/reason (first events))))
+        (is (= "192.168.1.99" (:sec-event/client-ip (first events))))))
+
+    ;; 2. URL-encoded CRLF Injection: attacker@breakwindow.lan%0d%0aBcc:...
+    (let [encoded-payload "attacker@breakwindow.lan%0d%0aBcc:everyone@company.com"]
+      (is (false? (email/valid-email? encoded-payload)))
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"Invalid email address format"
+           (email/validate-email! encoded-payload))))
+
+    ;; 3. Malformed syntax
+    (is (false? (email/valid-email? "not-an-email")))
+    (is (false? (email/valid-email? "")))
+    (is (false? (email/valid-email? nil)))
+    (is (false? (email/valid-email? "coach@breakwindow")))))
+
 
