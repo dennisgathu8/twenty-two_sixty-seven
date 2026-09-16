@@ -1,17 +1,21 @@
 (ns bwr.web.routes
-  "Reitit route definitions and Ring request handlers for public SSR views (§8).
-   Enforces boundary validation on path parameters (§9.1) and provides explicit
-   404/400 handling without leaking rule logic into the view layer."
+  "Reitit route definitions and Ring request handlers for public SSR views (§8)
+   and authenticated admin operations (§9). Enforces boundary validation on path
+   parameters (§9.1) and provides explicit 404/400/401/403/422 handling."
   (:require [clojure.spec.alpha :as s]
+            [clojure.string :as str]
             [clojure.java.io :as io]
             [reitit.ring :as ring]
             [reitit.ring.middleware.parameters :as params]
             [ring.util.response :as resp]
             [bwr.store.query :as store-query]
             [bwr.security.middleware :as sec]
+            [bwr.auth.session :as session]
+            [bwr.rules.loader :as rules-loader]
             [bwr.web.views.layout :as layout]
             [bwr.web.views.matches :as matches]
-            [bwr.web.views.teams :as teams]))
+            [bwr.web.views.teams :as teams]
+            [bwr.web.views.admin :as admin]))
 
 (set! *warn-on-reflection* true)
 
@@ -32,6 +36,11 @@
 (s/def ::team-id
   (s/and string?
          #(re-matches #"^[a-zA-Z0-9_\- ]+$" %)
+         #(<= 1 (count %) 64)))
+
+(s/def ::rule-id
+  (s/and string?
+         #(re-matches #"^[a-zA-Z0-9_\-]+$" %)
          #(<= 1 (count %) 64)))
 
 (defn- decode-param
@@ -190,6 +199,214 @@
       (layout/error-response 404 "Asset Not Found" (str "Asset '" path "' was not found.")))))
 
 ;; ============================================================================
+;; Admin Operational Handlers (§8, §9)
+;; ============================================================================
+
+(defn admin-dashboard-handler
+  "Renders the admin dashboard with rule status, hot-reload forms,
+   and data-quality override management."
+  [node request]
+  (let [db (store-query/db-at node)
+        store-rules (store-query/find-all-rules db)
+        resource-rules (vals (rules-loader/load-rules-from-resources))
+        rule-map (into (into {} (map (juxt :rule/id identity) resource-rules))
+                       (map (juxt :rule/id identity) store-rules))
+        rules (vec (vals rule-map))
+        matches (store-query/find-all-matches db)
+        csrf (or (:anti-forgery-token request)
+                 (get-in request [:session :session/csrf-token]))
+        status-msg (or (get-in request [:params :status]) (get-in request [:params "status"]))
+        error-msg (or (get-in request [:params :error]) (get-in request [:params "error"]))]
+    (layout/html-response
+     (admin/admin-dashboard-view
+      {:identity (:identity request)
+       :rules rules
+       :matches matches
+       :status-msg status-msg
+       :error-msg error-msg
+       :anti-forgery-token csrf}))))
+
+(defn- find-rule-content
+  "Finds and returns raw EDN string for the given rule identifier, or nil if not found."
+  [rule-id-str]
+  (let [clean-id (str/replace rule-id-str #"^rule/" "")
+        candidates [(str "rules/" clean-id ".edn")
+                    (str "rules/" (str/replace clean-id #"-" "_") ".edn")
+                    (str "rules/" (str/replace clean-id #"_" "-") ".edn")
+                    (str "resources/rules/" clean-id ".edn")
+                    (str "resources/rules/" (str/replace clean-id #"-" "_") ".edn")
+                    (str "resources/rules/" (str/replace clean-id #"_" "-") ".edn")]]
+    (or (some (fn [p]
+                (if-let [res (io/resource p)]
+                  (slurp res)
+                  (let [f (io/file p)]
+                    (when (.exists f)
+                      (slurp f)))))
+              candidates)
+        ;; Fallback: scan resources/rules directory for matching rule-id
+        (let [dir (io/file "resources/rules")]
+          (when (and (.exists dir) (.isDirectory dir))
+            (some (fn [^java.io.File f]
+                    (when (.endsWith (.getName f) ".edn")
+                      (try
+                        (let [data (clojure.edn/read-string (slurp f))
+                              rid (name (:rule/id data))]
+                          (when (= rid clean-id)
+                            (slurp f)))
+                        (catch Exception _ nil))))
+                  (.listFiles dir)))))))
+
+(defn admin-rule-reload-handler
+  "Hot-reloads a declarative rule from resources/rules/*.edn with fail-safe spec validation (§7, §8).
+   Rejects invalid/malformed rules with 422 Unprocessable Entity without touching XTDB."
+  [node request]
+  (let [raw-id (or (get-in request [:path-params :id])
+                   (get-in request [:params :rule_id])
+                   (get-in request [:params "rule_id"]))
+        rule-id-str (decode-param (or raw-id ""))]
+    (cond
+      (not (s/valid? ::rule-id rule-id-str))
+      (layout/error-response 400 "Bad Request" "Invalid rule identifier.")
+
+      :else
+      (if-let [edn-str (find-rule-content rule-id-str)]
+        (try
+          (let [parsed (rules-loader/parse-rule edn-str)
+                now (java.util.Date.)
+                rule-doc (assoc parsed
+                                :xt/id (:rule/id parsed)
+                                :rule/reloaded-at now)
+                tx (rules-loader/persist-rule! node rule-doc)]
+            (store-query/log-security-event!
+             node
+             {:sec-event/type :sec.type/rule-reloaded
+              :sec-event/identity (:identity request)
+              :sec-event/client-ip (sec/extract-client-ip request)
+              :sec-event/status :status/success
+              :sec-event/reason :reason/admin-action
+              :sec-event/detail {:rule-id (:rule/id rule-doc)
+                                 :version (:rule/version rule-doc)
+                                 :reloaded-at now
+                                 :tx-id (first tx)}})
+            (let [accept (get-in request [:headers "accept"] "")]
+              (if (or (str/includes? accept "application/edn")
+                      (str/includes? accept "application/json"))
+                (-> (resp/response (pr-str {:status :ok
+                                            :rule/id (:rule/id rule-doc)
+                                            :rule/version (:rule/version rule-doc)
+                                            :rule/reloaded-at now}))
+                    (resp/content-type "application/edn; charset=utf-8")
+                    (update :headers merge layout/security-headers))
+                (layout/html-response
+                 (admin/admin-dashboard-view
+                  {:identity (:identity request)
+                   :rules (store-query/find-all-rules (store-query/db-at node))
+                   :matches (store-query/find-all-matches (store-query/db-at node))
+                   :status-msg (str "Rule " (:rule/id rule-doc) " (version " (:rule/version rule-doc) ") hot-reloaded successfully at " now ".")
+                   :anti-forgery-token (or (:anti-forgery-token request)
+                                           (get-in request [:session :session/csrf-token]))})))))
+          (catch Throwable t
+            ;; Fail-safe: spec validation failed! Active rule in XTDB remains untouched.
+            (store-query/log-security-event!
+             node
+             {:sec-event/type :sec.type/rule-reload-failed
+              :sec-event/identity (:identity request)
+              :sec-event/client-ip (sec/extract-client-ip request)
+              :sec-event/status :status/failure
+              :sec-event/reason :reason/spec-validation-failed
+              :sec-event/detail {:rule-id rule-id-str
+                                 :error (.getMessage t)}})
+            (layout/error-response 422 "Unprocessable Entity"
+                                   (str "Rule hot-reload failed: spec validation error: " (.getMessage t)))))
+
+        ;; File not found
+        (do
+          (store-query/log-security-event!
+           node
+           {:sec-event/type :sec.type/rule-reload-failed
+            :sec-event/identity (:identity request)
+            :sec-event/client-ip (sec/extract-client-ip request)
+            :sec-event/status :status/failure
+            :sec-event/reason :reason/file-not-found
+            :sec-event/detail {:rule-id rule-id-str}})
+          (layout/error-response 404 "Rule Not Found"
+                                 (str "Rule definition file not found for '" rule-id-str "'.")))))))
+
+(defn- parse-quality-param
+  "Converts a quality string or keyword to a valid :quality/* keyword."
+  [q]
+  (cond
+    (nil? q) :quality/verified
+    (keyword? q) (if (= (namespace q) "quality") q (keyword "quality" (name q)))
+    (string? q) (let [clean (-> q (str/replace #"^:?quality/" "") (str/replace #"^:" ""))]
+                  (keyword "quality" clean))
+    :else :quality/verified))
+
+(defn admin-data-quality-handler
+  "Overrides the data quality tier for a match (§8, §9).
+   Mandates a non-blank audit reason and logs the override event to XTDB."
+  [node request]
+  (let [raw-id (or (get-in request [:path-params :id])
+                   (get-in request [:params :match_id])
+                   (get-in request [:params "match_id"]))
+        match-id (decode-param (or raw-id ""))
+        raw-reason (or (get-in request [:params :reason])
+                       (get-in request [:params "reason"]))
+        reason (when raw-reason (str/trim (str raw-reason)))
+        raw-quality (or (get-in request [:params :quality])
+                        (get-in request [:params "quality"])
+                        "verified")
+        quality (parse-quality-param raw-quality)]
+    (cond
+      (not (s/valid? ::match-id match-id))
+      (layout/error-response 400 "Bad Request" "Invalid match identifier.")
+
+      ;; Mandatory non-blank audit reason (§9.1)
+      (or (nil? reason) (str/blank? reason))
+      (layout/error-response 400 "Bad Request"
+                             "Data quality override requires a mandatory non-blank audit reason.")
+
+      :else
+      (let [db (store-query/db-at node)
+            match (store-query/find-match db match-id)]
+        (if-not match
+          (layout/error-response 404 "Match Not Found"
+                                 (str "Match '" match-id "' not found in verified storage."))
+          (let [old-quality (:match/data-quality match)
+                updated-match (assoc match :match/data-quality quality)
+                tx (store-query/transact! node [updated-match])]
+            (store-query/log-security-event!
+             node
+             {:sec-event/type :sec.type/data-quality-overridden
+              :sec-event/identity (:identity request)
+              :sec-event/client-ip (sec/extract-client-ip request)
+              :sec-event/status :status/success
+              :sec-event/reason :reason/manual-override
+              :sec-event/detail {:match-id match-id
+                                 :old-quality old-quality
+                                 :new-quality quality
+                                 :reason reason
+                                 :tx-id (first tx)}})
+            (let [accept (get-in request [:headers "accept"] "")]
+              (if (or (str/includes? accept "application/edn")
+                      (str/includes? accept "application/json"))
+                (-> (resp/response (pr-str {:status :ok
+                                            :match-id match-id
+                                            :old-quality old-quality
+                                            :new-quality quality
+                                            :reason reason}))
+                    (resp/content-type "application/edn; charset=utf-8")
+                    (update :headers merge layout/security-headers))
+                (layout/html-response
+                 (admin/admin-dashboard-view
+                  {:identity (:identity request)
+                   :rules (store-query/find-all-rules (store-query/db-at node))
+                   :matches (store-query/find-all-matches (store-query/db-at node))
+                   :status-msg (str "Match " match-id " data quality overridden to " (name quality) ". Reason recorded to audit trail.")
+                   :anti-forgery-token (or (:anti-forgery-token request)
+                                           (get-in request [:session :session/csrf-token]))}))))))))))
+
+;; ============================================================================
 ;; Route Table & Ring Handler Setup
 ;; ============================================================================
 
@@ -205,19 +422,33 @@
    ["/matches/:id"
     ["" {:get (partial match-handler node)}]
     ["/stoppages/:sid" {:get (partial stoppage-handler node)}]]
-   ["/teams/:id/break-profile" {:get (partial team-handler node)}]])
+   ["/teams/:id/break-profile" {:get (partial team-handler node)}]
+   ["/admin"
+    {:middleware [(session/wrap-require-auth node)
+                  (session/wrap-bwr-anti-forgery node)]
+     :bwr/require-auth? true}
+    ["" {:get (partial admin-dashboard-handler node)}]
+    ["/rules/:id/reload" {:post (partial admin-rule-reload-handler node)}]
+    ["/matches/:id/data-quality" {:post (partial admin-data-quality-handler node)}]
+    ["/matches/override" {:post (partial admin-data-quality-handler node)}]]])
 
 (defn create-app
-  "Creates and returns the Ring application handler for public SSR views."
-  [node]
-  (let [router (ring/router (create-routes node))]
-    (-> (ring/ring-handler
-         router
-         (ring/create-default-handler
-          {:not-found (fn [_]
-                        (layout/error-response 404 "Not Found" "The requested URL was not found on this server."))
-           :method-not-allowed (fn [_]
-                                 (layout/error-response 405 "Method Not Allowed" "HTTP method not supported for this route."))})
-         {:middleware [params/parameters-middleware]})
-        (sec/wrap-ip-containment node)
-        sec/wrap-security-headers)))
+  "Creates and returns the Ring application handler for public SSR views and admin routes.
+   Wraps with security headers, IP containment, rate-limiting, and parameter parsing."
+  ([node] (create-app node {}))
+  ([node opts]
+   (let [rate-limiter (or (:rate-limiter opts)
+                          (sec/create-rate-limiter {:max-requests 100 :window-seconds 60}))
+         router (ring/router (create-routes node))
+         app (ring/ring-handler
+              router
+              (ring/create-default-handler
+               {:not-found (fn [_]
+                             (layout/error-response 404 "Not Found" "The requested URL was not found on this server."))
+                :method-not-allowed (fn [_]
+                                      (layout/error-response 405 "Method Not Allowed" "HTTP method not supported for this route."))})
+              {:middleware [params/parameters-middleware]})]
+     (-> app
+         (sec/wrap-rate-limit rate-limiter node)
+         (sec/wrap-ip-containment node)
+         sec/wrap-security-headers))))

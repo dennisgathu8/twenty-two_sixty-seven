@@ -7,6 +7,8 @@
              [clojure.string :as str]
              [buddy.sign.jwt :as jwt]
              [xtdb.api :as xt]
+             [ring.middleware.anti-forgery :as af]
+             [ring.middleware.anti-forgery.strategy :as strat]
              [bwr.store.schema :as schema]
              [bwr.store.query :as store-query]
              [bwr.auth.magic-link :as magic-link]
@@ -49,6 +51,7 @@
          iat-epoch (int (/ now-ms 1000))
          client-ip (get opts :client-ip "127.0.0.1")
          user-agent (get opts :user-agent "unknown")
+         csrf-token (or (:csrf-token opts) (str (java.util.UUID/randomUUID)))
          claims {:sid sid
                  :sub identity-str
                  :iat iat-epoch
@@ -64,7 +67,8 @@
                       :session/revoked? false
                       :session/revoked-at nil
                       :session/client-ip client-ip
-                      :session/user-agent user-agent}]
+                      :session/user-agent user-agent
+                      :session/csrf-token csrf-token}]
 
      ;; 1. Transact session into XTDB
      (store-query/transact! node [session-doc])
@@ -84,6 +88,7 @@
      {:session-id session-id
       :token signed-token
       :identity identity-str
+      :csrf-token csrf-token
       :created-at now-inst
       :expires-at exp-inst})))
 
@@ -257,34 +262,59 @@
          (handler request)
          (let [auth-res (verify-session node token opts)]
            (if (:valid? auth-res)
-             (handler (assoc request
-                             :identity (:identity auth-res)
-                             :session (:session auth-res)
-                             :session-id (:session-id auth-res)))
+             (let [sess-doc (:session auth-res)
+                   csrf (or (:session/csrf-token sess-doc) (:session-id auth-res))
+                   sess-map (assoc sess-doc
+                                   :ring.middleware.anti-forgery/anti-forgery-token csrf
+                                   :session/csrf-token csrf)]
+               (handler (assoc request
+                               :identity (:identity auth-res)
+                               :session sess-map
+                               :session-id (:session-id auth-res)
+                               :anti-forgery-token csrf)))
              ;; Invalid/expired session: strip and pass through
              (handler request))))))))
 
 (defn wrap-require-auth
   "Ring middleware that gates access behind authentication.
    If unauthenticated, returns HTTP 401 Unauthorized (with security headers)
-   and logs an unauthorized access attempt to the XTDB audit log."
-  ([handler node] (wrap-require-auth handler node {}))
+   and logs an unauthorized access attempt to the XTDB audit log.
+   Supports both direct wrapping:
+     (wrap-require-auth handler node opts)
+   and Reitit/Ring middleware factory:
+     (wrap-require-auth node)
+     (wrap-require-auth node opts)"
+  ([node]
+   (if (fn? node)
+     (throw (IllegalArgumentException. "wrap-require-auth requires an XTDB node"))
+     (fn [handler] (wrap-require-auth handler node {}))))
+  ([a b]
+   (if (fn? a)
+     (wrap-require-auth a b {})
+     (fn [handler] (wrap-require-auth handler a b))))
   ([handler node opts]
    (fn [request]
      (let [client-ip (security/extract-client-ip request)
            token (extract-session-token request)
            auth-res (when token (verify-session node token opts))]
        (if (and auth-res (:valid? auth-res))
-         (handler (assoc request
-                         :identity (:identity auth-res)
-                         :session (:session auth-res)
-                         :session-id (:session-id auth-res)))
+         (let [sess-doc (:session auth-res)
+               csrf (or (:session/csrf-token sess-doc) (:session-id auth-res))
+               sess-map (assoc sess-doc
+                               :ring.middleware.anti-forgery/anti-forgery-token csrf
+                               :session/csrf-token csrf)]
+           (handler (assoc request
+                           :identity (:identity auth-res)
+                           :session sess-map
+                           :session-id (:session-id auth-res)
+                           :anti-forgery-token csrf)))
          ;; Unauthorized access attempt
          (do
            (when node
              (store-query/log-security-event!
               node
               {:sec-event/type :sec.type/unauthorized-access-blocked
+               :sec-event/identity (get auth-res :identity)
                :sec-event/client-ip client-ip
                :sec-event/status :status/failure
                :sec-event/reason (or (:reason auth-res) :reason/unauthenticated)
@@ -294,6 +324,65 @@
             :headers (merge security/security-headers
                             {"Content-Type" "text/plain; charset=utf-8"})
             :body "Unauthorized: Valid authenticated session required"}))))))
+
+;; ============================================================================
+;; Anti-Forgery CSRF Protection Strategy (§8, §9)
+;; ============================================================================
+
+(defrecord BwrSessionStrategy []
+  strat/Strategy
+  (valid-token? [_ request token]
+    (let [expected (or (get-in request [:session :ring.middleware.anti-forgery/anti-forgery-token])
+                       (get-in request [:session :session/csrf-token])
+                       (:anti-forgery-token request))]
+      (boolean (and (string? expected) (string? token) (= token expected)))))
+  (get-token [_ request]
+    (or (get-in request [:session :ring.middleware.anti-forgery/anti-forgery-token])
+        (get-in request [:session :session/csrf-token])
+        (:anti-forgery-token request)))
+  (write-token [_ _ response _]
+    response))
+
+(defn bwr-anti-forgery-strategy
+  "Returns a CSRF strategy bound directly to the authenticated coach's XTDB session entity."
+  []
+  (->BwrSessionStrategy))
+
+(defn wrap-bwr-anti-forgery
+  "Ring anti-forgery middleware bound directly to Step 6's XTDB session CSRF token.
+   Enforces CSRF protection on POST/PUT/DELETE routes, returning HTTP 403 Forbidden
+   with strict security headers on missing or mismatched CSRF tokens.
+   Supports both direct wrapping:
+     (wrap-bwr-anti-forgery handler node)
+   and Reitit/Ring middleware factory:
+     (wrap-bwr-anti-forgery)
+     (wrap-bwr-anti-forgery node)"
+  ([]
+   (fn [handler] (wrap-bwr-anti-forgery handler nil)))
+  ([node-or-handler]
+   (if (fn? node-or-handler)
+     (wrap-bwr-anti-forgery node-or-handler nil)
+     (fn [handler] (wrap-bwr-anti-forgery handler node-or-handler))))
+  ([handler node]
+   (af/wrap-anti-forgery
+    handler
+    {:strategy (bwr-anti-forgery-strategy)
+     :error-handler
+     (fn [request]
+       (when node
+         (store-query/log-security-event!
+          node
+          {:sec-event/type :sec.type/csrf-rejected
+           :sec-event/identity (:identity request)
+           :sec-event/client-ip (security/extract-client-ip request)
+           :sec-event/status :status/failure
+           :sec-event/reason :reason/csrf-token-mismatch
+           :sec-event/detail {:uri (:uri request)
+                              :method (:request-method request)}}))
+       {:status 403
+        :headers (merge security/security-headers
+                        {"Content-Type" "text/plain; charset=utf-8"})
+        :body "Forbidden: Invalid or missing CSRF anti-forgery token."})})))
 
 ;; ============================================================================
 ;; Unified Magic-Link-to-Session Handshake (§9.2)

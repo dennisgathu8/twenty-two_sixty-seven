@@ -173,6 +173,14 @@
                       team-name)]
     (mapv first results)))
 
+(defn find-all-rules
+  "Returns all registered rule definitions stored in XTDB snapshot."
+  [db]
+  (let [results (xt/q db
+                      '{:find [(pull ?r [*])]
+                        :where [[?r :rule/id _]]})]
+    (mapv first results)))
+
 ;; ============================================================================
 ;; Security Event Audit Trail Queries (§2.4, §9.4)
 ;; ============================================================================

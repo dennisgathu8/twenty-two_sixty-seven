@@ -95,6 +95,7 @@
 (s/def :rule/description string?)
 (s/def :rule/window-s pos-int?)
 (s/def :rule/predicate list?)
+(s/def :rule/reloaded-at inst?)
 
 (s/def ::rule
   (s/keys :req [:rule/id
@@ -102,7 +103,8 @@
                 :rule/description
                 :rule/window-s
                 :rule/predicate]
-          :opt [:xt/id]))
+          :opt [:xt/id
+                :rule/reloaded-at]))
 
 ;; 6. Generated Recommendation
 (s/def :recommendation/id string?)
@@ -179,6 +181,7 @@
 (s/def :session/revoked-at (s/nilable inst?))
 (s/def :session/client-ip (s/nilable string?))
 (s/def :session/user-agent (s/nilable string?))
+(s/def :session/csrf-token string?)
 
 (s/def ::session
   (s/keys :req [:session/id
@@ -190,7 +193,8 @@
           :opt [:xt/id
                 :session/revoked-at
                 :session/client-ip
-                :session/user-agent]))
+                :session/user-agent
+                :session/csrf-token]))
 
 ;; ============================================================================
 ;; Helper Utilities
