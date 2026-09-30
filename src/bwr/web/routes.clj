@@ -7,9 +7,12 @@
             [clojure.java.io :as io]
             [reitit.ring :as ring]
             [reitit.ring.middleware.parameters :as params]
+            [ring.middleware.cookies :as cookies]
             [ring.util.response :as resp]
+            [clojure.data.json :as json]
             [bwr.store.query :as store-query]
             [bwr.security.middleware :as sec]
+            [bwr.auth.magic-link :as magic-link]
             [bwr.auth.session :as session]
             [bwr.rules.loader :as rules-loader]
             [bwr.web.views.layout :as layout]
@@ -42,6 +45,11 @@
   (s/and string?
          #(re-matches #"^[a-zA-Z0-9_\-]+$" %)
          #(<= 1 (count %) 64)))
+
+(s/def ::magic-token
+  (s/and string?
+         #(re-matches #"^[a-zA-Z0-9_\-\.]+$" %)
+         #(<= 10 (count %) 1024)))
 
 (defn- decode-param
   "Decodes a URL-encoded string safely."
@@ -197,6 +205,85 @@
           (resp/content-type "text/css; charset=utf-8")
           (update :headers merge layout/security-headers))
       (layout/error-response 404 "Asset Not Found" (str "Asset '" path "' was not found.")))))
+
+(defn auth-verify-get-handler
+  "Validates token format and renders a 'Confirm sign-in' form without consuming (§9.2).
+   Protects single-use tokens from accidental burning by automated email scanners."
+  [_node request]
+  (let [raw-token (or (get-in request [:params :token])
+                      (get-in request [:params "token"]))
+        token (when raw-token (str/trim (str raw-token)))]
+    (cond
+      (or (nil? token) (str/blank? token))
+      (layout/error-response 400 "Bad Request" "Missing required magic link authentication token.")
+
+      (not (s/valid? ::magic-token token))
+      (layout/error-response 400 "Bad Request" "Malformed magic link authentication token format.")
+
+      :else
+      (layout/html-response
+       (layout/base-layout
+        {:title "Confirm Sign-in — Break-Window Response"
+         :description "Confirm single-use sign-in to administrative dashboard."}
+        [:div.card
+         [:h1 "Confirm Sign-in"]
+         [:p "Click below to confirm your single-use sign-in to the Break-Window Response coaching staff portal."]
+         [:form#confirm-signin-form {:method "POST" :action "/auth/verify"}
+          [:input {:type "hidden" :name "token" :value token}]
+          [:button#confirm-signin-btn.btn.btn-primary {:type "submit"} "Confirm sign-in"]]])))))
+
+(defn auth-verify-post-handler
+  "Atomically consumes the single-use magic link token (§9.2).
+   On success: sets authenticated bwr_session cookie and redirects 303 to /admin.
+   On failure/tampering/replay: returns semantic 401 error page."
+  [node request]
+  (let [raw-token (or (get-in request [:params :token])
+                      (get-in request [:params "token"])
+                      (get-in request [:form-params "token"])
+                      (get-in request [:form-params :token]))
+        token (when raw-token (str/trim (str raw-token)))]
+    (cond
+      (or (nil? token) (str/blank? token))
+      (layout/error-response 400 "Bad Request" "Missing required magic link authentication token.")
+
+      (not (s/valid? ::magic-token token))
+      (layout/error-response 400 "Bad Request" "Malformed magic link authentication token format.")
+
+      :else
+      (let [client-ip (sec/extract-client-ip request)
+            res (session/verify-magic-link-and-create-session! node token {:client-ip client-ip})]
+        (if (:valid? res)
+          (let [session-token (:session-token res)
+                cookie-spec (session/build-session-cookie session-token)]
+            (-> (resp/redirect "/admin" :see-other)
+                (resp/set-cookie session/session-cookie-name session-token cookie-spec)))
+          (layout/error-response 401 "Authentication Failed"
+                                 (or (:error res) "Magic link is invalid, expired, or already consumed.")))))))
+
+(def auth-verify-handler
+  "Backwards-compatible handler executing POST verification."
+  auth-verify-post-handler)
+
+(defn test-magic-link-handler
+  "Test-only magic link minter, strictly mounted when BWR_ENV=test.
+   Enables automated browser E2E tests to drive real magic-link verification."
+  [node request]
+  (if-not (session/test-environment?)
+    (layout/error-response 404 "Not Found" "The requested URL was not found on this server.")
+    (let [raw-id (or (get-in request [:params :identity])
+                     (get-in request [:params "identity"])
+                     "head-coach@breakwindow.lan")
+          client-ip (sec/extract-client-ip request)
+          res (magic-link/generate-magic-link! node {:identity raw-id
+                                                     :client-ip client-ip
+                                                     :send-email? false})]
+      (if (:authorized? res)
+        (-> (resp/response (json/write-str {:status "ok"
+                                            :token (:token res)
+                                            :magicLinkUrl (str "/auth/verify?token=" (:token res))}))
+            (resp/content-type "application/json; charset=utf-8")
+            (update :headers merge layout/security-headers))
+        (layout/error-response 403 "Forbidden" "Identity not authorized for magic link generation.")))))
 
 ;; ============================================================================
 ;; Admin Operational Handlers (§8, §9)
@@ -413,42 +500,50 @@
 (defn create-routes
   "Returns the Reitit route table with handlers bound to the given XTDB node."
   [node]
-  [["/" {:get (partial home-handler node)}]
-   ["/health" {:get (fn [_]
-                      (-> (resp/response "{:status :ok :service :break-window-response}")
-                          (resp/content-type "application/edn")
-                          (update :headers merge layout/security-headers)))}]
-   ["/css/*path" {:get static-css-handler}]
-   ["/matches/:id"
-    ["" {:get (partial match-handler node)}]
-    ["/stoppages/:sid" {:get (partial stoppage-handler node)}]]
-   ["/teams/:id/break-profile" {:get (partial team-handler node)}]
-   ["/admin"
-    {:middleware [(session/wrap-require-auth node)
-                  (session/wrap-bwr-anti-forgery node)]
-     :bwr/require-auth? true}
-    ["" {:get (partial admin-dashboard-handler node)}]
-    ["/rules/:id/reload" {:post (partial admin-rule-reload-handler node)}]
-    ["/matches/:id/data-quality" {:post (partial admin-data-quality-handler node)}]
-    ["/matches/override" {:post (partial admin-data-quality-handler node)}]]])
+  (let [base-routes
+        [["/" {:get (partial home-handler node)}]
+         ["/health" {:get (fn [_]
+                            (-> (resp/response "{:status :ok :service :break-window-response}")
+                                (resp/content-type "application/edn")
+                                (update :headers merge layout/security-headers)))}]
+         ["/css/*path" {:get static-css-handler}]
+         ["/auth/verify" {:get (partial auth-verify-get-handler node)
+                          :post (partial auth-verify-post-handler node)}]
+         ["/matches/:id"
+          ["" {:get (partial match-handler node)}]
+          ["/stoppages/:sid" {:get (partial stoppage-handler node)}]]
+         ["/teams/:id/break-profile" {:get (partial team-handler node)}]
+         ["/admin"
+          {:middleware [(session/wrap-require-auth node)
+                        (session/wrap-bwr-anti-forgery node)]
+           :bwr/require-auth? true}
+          ["" {:get (partial admin-dashboard-handler node)}]
+          ["/rules/:id/reload" {:post (partial admin-rule-reload-handler node)}]
+          ["/matches/:id/data-quality" {:post (partial admin-data-quality-handler node)}]
+          ["/matches/override" {:post (partial admin-data-quality-handler node)}]]]]
+    (if (session/test-environment?)
+      (conj base-routes
+            ["/test/auth/magic-link" {:post (partial test-magic-link-handler node)}])
+      base-routes)))
 
 (defn create-app
   "Creates and returns the Ring application handler for public SSR views and admin routes.
-   Wraps with security headers, IP containment, rate-limiting, and parameter parsing."
+   Wraps with security headers, IP containment, rate-limiting, session cookies, and parameter parsing."
   ([node] (create-app node {}))
   ([node opts]
    (let [rate-limiter (or (:rate-limiter opts)
                           (sec/create-rate-limiter {:max-requests 100 :window-seconds 60}))
-         router (ring/router (create-routes node))
+         router (ring/router (create-routes node)
+                             {:data {:middleware [params/parameters-middleware]}})
          app (ring/ring-handler
               router
               (ring/create-default-handler
                {:not-found (fn [_]
                              (layout/error-response 404 "Not Found" "The requested URL was not found on this server."))
                 :method-not-allowed (fn [_]
-                                      (layout/error-response 405 "Method Not Allowed" "HTTP method not supported for this route."))})
-              {:middleware [params/parameters-middleware]})]
+                                      (layout/error-response 405 "Method Not Allowed" "HTTP method not supported for this route."))}))]
      (-> app
+         cookies/wrap-cookies
          (sec/wrap-rate-limit rate-limiter node)
          (sec/wrap-ip-containment node)
          sec/wrap-security-headers))))

@@ -26,8 +26,13 @@ data/
 .env.*
 !.env.example
 *.log
+*.out
 
 # Local tools & caches
 bin/
 .clj-cache/
 
+# Node & Playwright E2E artifacts (§6)
+node_modules/
+test-results/
+playwright-report/

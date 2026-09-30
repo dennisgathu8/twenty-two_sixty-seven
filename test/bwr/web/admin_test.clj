@@ -13,6 +13,7 @@
             [bwr.store.node :as store-node]
             [bwr.store.query :as store-query]
             [bwr.auth.session :as session]
+            [bwr.auth.magic-link :as magic-link]
             [bwr.web.routes :as routes]
             [bwr.rules.loader :as rules-loader]))
 
@@ -348,3 +349,95 @@
         (is (str/includes? (:body updated-resp) "badge-verified"))
         (is (str/includes? (:body updated-resp) "Verified Data"))
         (is (not (str/includes? (:body updated-resp) "badge-unverified")))))))
+
+;; ============================================================================
+;; 8. Single-Use Magic Link Verification & Set-Cookie Emission (§9.2, §10)
+;; ============================================================================
+
+(deftest auth-verify-endpoint-and-set-cookie-test
+  (testing "GET /auth/verify renders confirmation page without consuming token"
+    (setup-test-environment! *node*)
+    (let [app (routes/create-app *node*)
+          gen-res (magic-link/generate-magic-link! *node* {:identity "head-coach@breakwindow.lan"
+                                                           :client-ip "127.0.0.1"
+                                                           :send-email? false})
+          token (:token gen-res)
+          jti (:jti gen-res)]
+
+      ;; 1. GET with missing token -> 400
+      (let [resp (app (mock/request :get "/auth/verify"))]
+        (is (= 400 (:status resp)))
+        (is (str/includes? (:body resp) "Missing required magic link authentication token")))
+
+      ;; 2. GET with malformed token -> 400
+      (let [resp (app (mock/request :get "/auth/verify?token=short"))]
+        (is (= 400 (:status resp)))
+        (is (str/includes? (:body resp) "Malformed magic link authentication token format")))
+
+      ;; 3. GET with valid token -> 200 Confirm Sign-in page
+      (let [resp (app (mock/request :get (str "/auth/verify?token=" token)))]
+        (is (= 200 (:status resp)))
+        (is (str/includes? (:body resp) "Confirm Sign-in"))
+        (is (str/includes? (:body resp) "action=\"/auth/verify\""))
+        (is (str/includes? (:body resp) token)))
+
+      ;; 4. Verify token was NOT consumed by GET
+      (let [db (store-query/db-at *node*)
+            token-doc (store-query/entity db (str "token-" jti))]
+        (is (some? token-doc))
+        (is (false? (:token/consumed? token-doc))))))
+
+  (testing "POST /auth/verify atomically consumes token, redirects 303 to /admin, and sets secure cookie"
+    (setup-test-environment! *node*)
+    (let [app (routes/create-app *node*)
+          gen-res (magic-link/generate-magic-link! *node* {:identity "head-coach@breakwindow.lan"
+                                                           :client-ip "127.0.0.1"
+                                                           :send-email? false})
+          token (:token gen-res)
+          jti (:jti gen-res)
+          post-resp (app (mock/request :post "/auth/verify" {"token" token}))]
+
+      ;; 1. Status is 303 See Other
+      (is (= 303 (:status post-resp)))
+      (is (= "/admin" (get-in post-resp [:headers "Location"])))
+
+      ;; 2. Set-Cookie header emitted with required security flags (§9.2, §4)
+      (let [set-cookie (or (get-in post-resp [:headers "Set-Cookie"])
+                           (get-in post-resp [:headers "set-cookie"]))
+            cookie-str (if (coll? set-cookie) (first set-cookie) (str set-cookie))]
+        (is (some? set-cookie) "Set-Cookie header must be emitted on verify response")
+        (is (str/includes? cookie-str (str session/session-cookie-name "=")))
+        (is (str/includes? cookie-str "HttpOnly"))
+        (is (str/includes? cookie-str "SameSite=Lax"))
+        (is (str/includes? cookie-str "Path=/"))
+        ;; When not in BWR_ENV=test mode, Secure flag must be present (§9.2, §4)
+        (is (str/includes? cookie-str "Secure")))
+
+      ;; 3. Token is now marked consumed in XTDB
+      (let [db (store-query/db-at *node*)
+            token-doc (store-query/entity db (str "token-" jti))]
+        (is (some? token-doc))
+        (is (true? (:token/consumed? token-doc))))
+
+      ;; 4. Replay attack: submitting same token again returns 401
+      (let [replay-resp (app (mock/request :post "/auth/verify" {"token" token}))]
+        (is (= 401 (:status replay-resp)))
+        (is (str/includes? (:body replay-resp) "Authentication Failed")))))
+
+  (testing "POST /auth/verify in test mode relaxes Secure flag for local HTTP testing"
+    (setup-test-environment! *node*)
+    (with-redefs [session/test-environment? (constantly true)]
+      (let [app (routes/create-app *node*)
+            gen-res (magic-link/generate-magic-link! *node* {:identity "head-coach@breakwindow.lan"
+                                                             :client-ip "127.0.0.1"
+                                                             :send-email? false})
+            token (:token gen-res)
+            post-resp (app (mock/request :post "/auth/verify" {"token" token}))
+            set-cookie (or (get-in post-resp [:headers "Set-Cookie"])
+                           (get-in post-resp [:headers "set-cookie"]))
+            cookie-str (if (coll? set-cookie) (first set-cookie) (str set-cookie))]
+        (is (= 303 (:status post-resp)))
+        (is (some? set-cookie))
+        (is (str/includes? cookie-str "HttpOnly"))
+        (is (not (str/includes? cookie-str "Secure")))))))
+

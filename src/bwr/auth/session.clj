@@ -12,9 +12,16 @@
              [bwr.store.schema :as schema]
              [bwr.store.query :as store-query]
              [bwr.auth.magic-link :as magic-link]
-             [bwr.security.middleware :as security]))
+             [bwr.security.middleware :as security]
+             [bwr.web.views.layout :as layout]))
 
 (set! *warn-on-reflection* true)
+
+(defn test-environment?
+  "Returns true strictly when the process environment variable BWR_ENV is set to 'test'.
+   Used strictly to gate test-only endpoints and relaxed local test cookies (§9.2, §10)."
+  []
+  (= (System/getenv "BWR_ENV") "test"))
 
 (def default-session-ttl-seconds
   "Default session duration: 8 hours (28,800 seconds)."
@@ -224,28 +231,34 @@
 
 (defn build-session-cookie
   "Generates Set-Cookie specification map for a new session.
-   Enforces Secure flag by default for HTTPS transport (§4)."
+   Enforces Secure flag by default for HTTPS transport (§4).
+   Only relaxes Secure flag if explicitly running under BWR_ENV=test."
   ([token] (build-session-cookie token {}))
   ([token opts]
-   {:value token
-    :path "/"
-    :http-only true
-    :same-site :lax
-    :secure (get opts :secure? true)
-    :max-age (long (get opts :ttl-seconds default-session-ttl-seconds))}))
+   (let [default-secure? (not (test-environment?))
+         secure? (get opts :secure? default-secure?)]
+     {:value token
+      :path "/"
+      :http-only true
+      :same-site :lax
+      :secure secure?
+      :max-age (long (get opts :ttl-seconds default-session-ttl-seconds))})))
 
 (defn clear-session-cookie
   "Generates Set-Cookie specification map to clear/delete the session cookie.
-   Enforces Secure flag by default for HTTPS transport (§4)."
+   Enforces Secure flag by default for HTTPS transport (§4).
+   Only relaxes Secure flag if explicitly running under BWR_ENV=test."
   ([] (clear-session-cookie {}))
   ([opts]
-   {:value ""
-    :path "/"
-    :http-only true
-    :same-site :lax
-    :secure (get opts :secure? true)
-    :max-age 0
-    :expires "Thu, 01 Jan 1970 00:00:00 GMT"}))
+   (let [default-secure? (not (test-environment?))
+         secure? (get opts :secure? default-secure?)]
+     {:value ""
+      :path "/"
+      :http-only true
+      :same-site :lax
+      :secure secure?
+      :max-age 0
+      :expires "Thu, 01 Jan 1970 00:00:00 GMT"})))
 
 ;; ============================================================================
 ;; Ring Authentication & Authorization Middleware (§9.2, §9.3)
@@ -320,10 +333,15 @@
                :sec-event/reason (or (:reason auth-res) :reason/unauthenticated)
                :sec-event/detail {:uri (:uri request)
                                   :method (:request-method request)}}))
-           {:status 401
-            :headers (merge security/security-headers
-                            {"Content-Type" "text/plain; charset=utf-8"})
-            :body "Unauthorized: Valid authenticated session required"}))))))
+           (let [accept-hdr (get-in request [:headers "accept"] "")
+                 wants-html? (or (str/includes? accept-hdr "text/html")
+                                 (= (:request-method request) :get))]
+             (if wants-html?
+               (layout/error-response 401 "Unauthorized" "Valid authenticated session required. Please sign in with a single-use magic link.")
+               {:status 401
+                :headers (merge security/security-headers
+                                {"Content-Type" "text/plain; charset=utf-8"})
+                :body "Unauthorized: Valid authenticated session required"}))))))))
 
 ;; ============================================================================
 ;; Anti-Forgery CSRF Protection Strategy (§8, §9)

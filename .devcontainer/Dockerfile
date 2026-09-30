@@ -6,9 +6,10 @@ ENV JAVA_VERSION=17 \
     CLOJURE_VERSION=1.12.0.1488 \
     CADDY_VERSION=2.8.4 \
     MAILPIT_VERSION=1.31.1 \
+    NODE_VERSION=22.14.0 \
     DEBIAN_FRONTEND=noninteractive
 
-# System dependencies from Debian 12 Bookworm
+# System dependencies from Debian 12 Bookworm + Chromium headless dependencies (§10)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-17-jdk-headless \
     curl \
@@ -19,6 +20,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rlwrap \
     sudo \
     tar \
+    xz-utils \
+    fonts-liberation \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcairo2 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libglib2.0-0 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxi6 \
+    libxkbcommon0 \
+    libxrandr2 \
+    libxrender1 \
+    libxshmfence1 \
+    libxtst6 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Clojure CLI (pinned to 1.12.0.1488)
@@ -26,6 +56,17 @@ RUN curl -fsSL -O https://download.clojure.org/install/linux-install-${CLOJURE_V
     && chmod +x linux-install-${CLOJURE_VERSION}.sh \
     && ./linux-install-${CLOJURE_VERSION}.sh \
     && rm linux-install-${CLOJURE_VERSION}.sh
+
+# Install Node.js (pinned to v22.14.0 LTS)
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) NODE_ARCH="x64" ;; \
+         arm64) NODE_ARCH="arm64" ;; \
+         *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+       esac \
+    && curl -fsSL -O "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
+    && tar -xJf "node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" -C /usr/local --strip-components=1 --no-same-owner \
+    && rm "node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
 
 # Install Caddy (pinned to v2.8.4 release deb; no external unpinned repo)
 RUN ARCH=$(dpkg --print-architecture) \

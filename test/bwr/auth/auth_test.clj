@@ -166,10 +166,11 @@
                 :client-ip "10.0.0.10"})
           token (:token res)
           jti (:jti res)
-          ;; Flip the final character of the signature
-          last-char (str (last token))
-          replacement (if (= last-char "a") "b" "a")
-          tampered-token (str (subs token 0 (dec (count token))) replacement)]
+          ;; Flip a character in the interior of the signature (avoiding base64 trailing padding bits)
+          tamper-idx (- (count token) 10)
+          orig-char (str (nth token tamper-idx))
+          replacement (if (= orig-char "a") "b" "a")
+          tampered-token (str (subs token 0 tamper-idx) replacement (subs token (inc tamper-idx)))]
 
       ;; Verification of tampered token must fail
       (let [verify-res (magic-link/verify-and-consume! *node* tampered-token {:secret test-secret :client-ip "192.168.1.99"})]
