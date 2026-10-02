@@ -1,8 +1,23 @@
 // @ts-check
 const { test, expect } = require('@playwright/test');
 
+/**
+ * Helper to log in as an authorized admin operator via the single-use magic-link flow (§9.2).
+ * Navigates through the scanner-safe confirmation page to obtain a valid bwr_session cookie.
+ */
+async function loginAsAdmin(page, request) {
+  const mintResp = await request.post('/test/auth/magic-link', {
+    data: { identity: 'head-coach@breakwindow.lan' },
+  });
+  expect(mintResp.ok()).toBeTruthy();
+  const { magicLinkUrl } = await mintResp.json();
+  await page.goto(magicLinkUrl);
+  await page.locator('#confirm-signin-btn').click();
+  await page.waitForURL('**/admin');
+}
+
 test.describe('Admin Operations, Magic-Link Authentication & Security Contours (§8, §9, §10)', () => {
-  test('full magic-link authentication flow: GET confirm sign-in -> POST consume -> /admin access', async ({ page, request }) => {
+  test('magic-link authentication flow: GET confirm sign-in -> POST consume -> /admin access (§9.2, §10)', async ({ page, request }) => {
     // 1. Mint a fresh magic link via the test-only endpoint (BWR_ENV=test)
     const mintResp = await request.post('/test/auth/magic-link', {
       data: { identity: 'head-coach@breakwindow.lan' },
@@ -28,35 +43,64 @@ test.describe('Admin Operations, Magic-Link Authentication & Security Contours (
     await expect(page.locator('h1')).toContainText('Strategy & Operations Administration');
     await expect(page.locator('.admin-operator-badge')).toContainText('head-coach@breakwindow.lan');
     await expect(page.locator('.match-meta')).toContainText('XTDB 1.x (Bi-temporal)');
+  });
 
-    // 5. Test Rule Hot-Reload (§7, §8)
-    const hotReloadBtn = page.locator('form[action*="/admin/rules/break-window-substitution-pattern/reload"] button');
+  test('rule hot-reload through the dashboard form updates timestamp and displays success alert (§7, §8)', async ({ page, request }) => {
+    await loginAsAdmin(page, request);
+
+    // Locate rule row in Declarative Rule Engine Status table
+    const ruleRow = page.locator('tr', { hasText: 'rule/break-window-substitution-pattern' });
+    await expect(ruleRow).toBeVisible();
+
+    // Capture the "Last Reloaded" cell text before triggering hot-reload
+    const lastReloadedCell = ruleRow.locator('td').nth(3);
+    const beforeTimestamp = await lastReloadedCell.innerText();
+
+    // Click "Hot Reload" button inside the rendered form (exercises real browser CSRF token)
+    const hotReloadBtn = ruleRow.locator('button', { hasText: 'Hot Reload' });
     await expect(hotReloadBtn).toBeVisible();
     await hotReloadBtn.click();
+
+    // Assert flash success message
     await expect(page.locator('.alert-success')).toContainText('hot-reloaded successfully');
 
-    // 6. Test Data-Quality Override & Public Reflection (§8, §9)
-    await page.selectOption('#match-select', 'M42');
-    await page.selectOption('#quality-select', 'unverified');
-    await page.fill('#reason-input', 'Audited by head coach analyst during automated E2E test');
-    await page.locator('#data-quality-form button[type="submit"]').click();
+    // Assert that the "Last Reloaded" cell text changed from its pre-reload state
+    const afterTimestamp = await lastReloadedCell.innerText();
+    expect(afterTimestamp).not.toBe(beforeTimestamp);
+    expect(afterTimestamp).toContain('UTC');
+  });
 
-    await expect(page.locator('.alert-success')).toContainText('data quality overridden to unverified');
+  test('data-quality override through the dashboard form updates tier and reflects on public view (§8, §9)', async ({ page, request }) => {
+    await loginAsAdmin(page, request);
 
-    // Verify public view immediately reflects override
-    await page.goto('/matches/M42');
-    await expect(page.locator('.badge-unverified')).toContainText('Unverified Data');
+    try {
+      // 1. Select match M42, choose 'unverified', fill mandatory audit reason, submit form
+      await page.selectOption('#match-select', 'M42');
+      await page.selectOption('#quality-select', 'unverified');
+      await page.fill('#reason-input', 'Audited by head coach analyst during automated E2E test');
+      await page.locator('#data-quality-form button[type="submit"]').click();
 
-    // Restore to verified
-    await page.goto('/admin');
-    await page.selectOption('#match-select', 'M42');
-    await page.selectOption('#quality-select', 'verified');
-    await page.fill('#reason-input', 'Restored verified tier post-audit');
-    await page.locator('#data-quality-form button[type="submit"]').click();
-    await expect(page.locator('.alert-success')).toContainText('data quality overridden to verified');
+      // Assert flash success message
+      await expect(page.locator('.alert-success')).toContainText('data quality overridden to unverified');
 
-    await page.goto('/matches/M42');
-    await expect(page.locator('.badge-verified')).toContainText('Verified Data');
+      // 2. Verify public match view immediately reflects 'Unverified Data' badge
+      await page.goto('/matches/M42');
+      await expect(page.locator('.badge-unverified')).toContainText('Unverified Data');
+    } finally {
+      // 3. Shared-state cleanup: always restore match M42 to 'verified' even if assertions fail
+      await page.goto('/admin');
+      if (await page.locator('#match-select').isVisible()) {
+        await page.selectOption('#match-select', 'M42');
+        await page.selectOption('#quality-select', 'verified');
+        await page.fill('#reason-input', 'Restored verified tier post-audit cleanup');
+        await page.locator('#data-quality-form button[type="submit"]').click();
+        await expect(page.locator('.alert-success')).toContainText('data quality overridden to verified');
+      }
+
+      // Verify public match report badge is back to 'Verified Data'
+      await page.goto('/matches/M42');
+      await expect(page.locator('.badge-verified')).toContainText('Verified Data');
+    }
   });
 
   test('single-use token replay protection renders 401 error page (§9.2, §10)', async ({ page, request }) => {
