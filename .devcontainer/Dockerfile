@@ -51,32 +51,69 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxtst6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Clojure CLI (pinned to 1.12.0.1488)
-RUN curl -fsSL -O https://download.clojure.org/install/linux-install-${CLOJURE_VERSION}.sh \
-    && chmod +x linux-install-${CLOJURE_VERSION}.sh \
-    && ./linux-install-${CLOJURE_VERSION}.sh \
-    && rm linux-install-${CLOJURE_VERSION}.sh
+# ==============================================================================
+# Pinned SHA-256 checksums for verified artifact downloads (§4, §9, §12)
+# Declared below the apt layer to strictly preserve its cached build layer.
+#
+# How to bump a pin:
+#   1. Bump the VERSION variable in the top ENV block (above apt).
+#   2. Look up the upstream published SHA-256 for the new version (or compute
+#      and document TOFU if none published).
+#   3. Update the corresponding SHA256 variable(s) below.
+# ==============================================================================
 
-# Install Node.js (pinned to v22.14.0 LTS)
+# Clojure CLI 1.12.0.1488: Trust-on-first-use (TOFU). No upstream checksum published; computed from download URL.
+ENV CLOJURE_INSTALLER_SHA256="5f679e004acd3354c5b28d76703d14b96eb9b6d839eaca4f54b13b90b764682e" \
+    # Node.js 22.14.0 LTS: Sourced from official https://nodejs.org/dist/v22.14.0/SHASUMS256.txt
+    NODE_SHA256_X64="69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec" \
+    NODE_SHA256_ARM64="08bfbf538bad0e8cbb0269f0173cca28d705874a67a22f60b57d99dc99e30050" \
+    # Caddy 2.8.4: Computed from official GitHub release deb assets; verified against upstream caddy_2.8.4_checksums.txt (SHA-512)
+    CADDY_SHA256_AMD64="8ea1c5dd7736307e4b4baab2a3ffe51f28f4e344536cbc32f3e4bf12e65d79cd" \
+    CADDY_SHA256_ARM64="8ada2c4ef24feeb1eb899fd31a50e73e13813bc993d1149f4ab4bc07ceda5a90" \
+    # Mailpit 1.31.1: Sourced from official GitHub release asset metadata digests (v1.31.1 API)
+    MAILPIT_SHA256_AMD64="87d2652abd7c17dc99029147ff62ac671afdf7fd76630f7faf5b14125211c709" \
+    MAILPIT_SHA256_ARM64="be6a1f9dcf0ac0d7157ee777eac2b5351352b367bcae3c0a0f4854da60546884"
+
+# Install Clojure CLI (pinned to 1.12.0.1488 with SHA-256 verification)
+RUN curl -fsSL -O "https://download.clojure.org/install/linux-install-${CLOJURE_VERSION}.sh" \
+    && echo "${CLOJURE_INSTALLER_SHA256}  linux-install-${CLOJURE_VERSION}.sh" | sha256sum -c - \
+    && chmod +x "linux-install-${CLOJURE_VERSION}.sh" \
+    && ./"linux-install-${CLOJURE_VERSION}.sh" \
+    && rm "linux-install-${CLOJURE_VERSION}.sh"
+
+# Install Node.js (pinned to v22.14.0 LTS with SHA-256 verification)
 RUN ARCH=$(dpkg --print-architecture) \
     && case "$ARCH" in \
-         amd64) NODE_ARCH="x64" ;; \
-         arm64) NODE_ARCH="arm64" ;; \
+         amd64) NODE_ARCH="x64" NODE_SHA256="${NODE_SHA256_X64}" ;; \
+         arm64) NODE_ARCH="arm64" NODE_SHA256="${NODE_SHA256_ARM64}" ;; \
          *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
        esac \
     && curl -fsSL -O "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
+    && echo "${NODE_SHA256}  node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" | sha256sum -c - \
     && tar -xJf "node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" -C /usr/local --strip-components=1 --no-same-owner \
     && rm "node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
 
-# Install Caddy (pinned to v2.8.4 release deb; no external unpinned repo)
+# Install Caddy (pinned to v2.8.4 release deb with SHA-256 verification)
 RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) CADDY_SHA256="${CADDY_SHA256_AMD64}" ;; \
+         arm64) CADDY_SHA256="${CADDY_SHA256_ARM64}" ;; \
+         *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+       esac \
     && curl -fsSL -O "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${ARCH}.deb" \
+    && echo "${CADDY_SHA256}  caddy_${CADDY_VERSION}_linux_${ARCH}.deb" | sha256sum -c - \
     && dpkg -i "caddy_${CADDY_VERSION}_linux_${ARCH}.deb" \
     && rm "caddy_${CADDY_VERSION}_linux_${ARCH}.deb"
 
-# Install Mailpit (pinned to v1.31.1 release binary; direct archive download without GitHub API rate limits)
+# Install Mailpit (pinned to v1.31.1 release binary with SHA-256 verification)
 RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) MAILPIT_SHA256="${MAILPIT_SHA256_AMD64}" ;; \
+         arm64) MAILPIT_SHA256="${MAILPIT_SHA256_ARM64}" ;; \
+         *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+       esac \
     && curl -fsSL -O "https://github.com/axllent/mailpit/releases/download/v${MAILPIT_VERSION}/mailpit-linux-${ARCH}.tar.gz" \
+    && echo "${MAILPIT_SHA256}  mailpit-linux-${ARCH}.tar.gz" | sha256sum -c - \
     && tar -xzf "mailpit-linux-${ARCH}.tar.gz" -C /usr/local/bin mailpit \
     && rm "mailpit-linux-${ARCH}.tar.gz" \
     && chmod +x /usr/local/bin/mailpit
