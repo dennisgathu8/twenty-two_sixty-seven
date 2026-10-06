@@ -29,7 +29,7 @@
   [content-or-bytes]
   (let [digest (java.security.MessageDigest/getInstance "SHA-384")
         bytes (if (string? content-or-bytes)
-                (.getBytes ^String content-or-bytes "UTF-8")
+                (.getBytes ^String content-or-bytes java.nio.charset.StandardCharsets/UTF_8)
                 ^bytes content-or-bytes)
         hash (.digest digest bytes)
         b64 (.encodeToString (java.util.Base64/getEncoder) hash)]
@@ -39,7 +39,7 @@
   "Cached SRI sha384 hash of the local main.css stylesheet."
   (delay
     (if-let [res (io/resource "public/css/main.css")]
-      (compute-sri-hash (slurp res))
+      (compute-sri-hash (slurp res :encoding "UTF-8"))
       (compute-sri-hash "/* fallback */"))))
 
 ;; ============================================================================

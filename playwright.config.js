@@ -28,7 +28,7 @@ module.exports = defineConfig({
     },
   ],
   webServer: {
-    command: 'env BWR_ENV=test clojure -M -m bwr.main --seed',
+    command: 'env BWR_ENV=test BWR_RATE_LIMIT_MAX=10000 clojure -M -m bwr.main --seed',
     url: 'http://localhost:3000/health',
     reuseExistingServer: false,
     timeout: 60 * 1000,

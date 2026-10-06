@@ -237,7 +237,7 @@
       (let [bad-rule-file (clojure.java.io/file "resources/rules/malformed_test_rule.edn")]
         (try
           ;; Invalid schema: missing :rule/predicate and :rule/window-s
-          (spit bad-rule-file "{:rule/id :rule/malformed-test-rule :rule/version \"0.0.1\"}")
+          (spit bad-rule-file "{:rule/id :rule/malformed-test-rule :rule/version \"0.0.1\"}" :encoding "UTF-8")
 
           (let [req (-> (mock/request :post "/admin/rules/malformed-test-rule/reload"
                                       {"__anti-forgery-token" csrf})

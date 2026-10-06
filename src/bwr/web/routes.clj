@@ -201,7 +201,7 @@
   (let [path (get-in request [:path-params :path])
         resource-path (str "public/css/" path)]
     (if-let [res (io/resource resource-path)]
-      (-> (resp/response (slurp res))
+      (-> (resp/response (slurp res :encoding "UTF-8"))
           (resp/content-type "text/css; charset=utf-8")
           (update :headers merge layout/security-headers))
       (layout/error-response 404 "Asset Not Found" (str "Asset '" path "' was not found.")))))
@@ -325,10 +325,10 @@
                     (str "resources/rules/" (str/replace clean-id #"_" "-") ".edn")]]
     (or (some (fn [p]
                 (if-let [res (io/resource p)]
-                  (slurp res)
+                  (slurp res :encoding "UTF-8")
                   (let [f (io/file p)]
                     (when (.exists f)
-                      (slurp f)))))
+                      (slurp f :encoding "UTF-8")))))
               candidates)
         ;; Fallback: scan resources/rules directory for matching rule-id
         (let [dir (io/file "resources/rules")]
@@ -336,10 +336,10 @@
             (some (fn [^java.io.File f]
                     (when (.endsWith (.getName f) ".edn")
                       (try
-                        (let [data (clojure.edn/read-string (slurp f))
+                        (let [data (clojure.edn/read-string (slurp f :encoding "UTF-8"))
                               rid (name (:rule/id data))]
                           (when (= rid clean-id)
-                            (slurp f)))
+                            (slurp f :encoding "UTF-8")))
                         (catch Exception _ nil))))
                   (.listFiles dir)))))))
 

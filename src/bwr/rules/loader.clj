@@ -16,7 +16,7 @@
   [edn-input]
   (let [data (if (string? edn-input)
                (edn/read-string edn-input)
-               (edn/read (java.io.PushbackReader. (io/reader edn-input))))]
+               (edn/read (java.io.PushbackReader. (io/reader edn-input :encoding "UTF-8"))))]
     (schema/validate-entity! data)))
 
 (defn load-rule-file
@@ -25,13 +25,13 @@
   (let [f (io/file path)]
     (when-not (.exists f)
       (throw (ex-info (str "Rule file not found: " path) {:path path})))
-    (parse-rule (slurp f))))
+    (parse-rule (slurp f :encoding "UTF-8"))))
 
 (defn load-rule-resource
   "Loads and validates a rule from a classpath resource path (e.g. 'rules/break_window_substitution_pattern.edn')."
   [resource-path]
   (if-let [res (io/resource resource-path)]
-    (parse-rule (slurp res))
+    (parse-rule (slurp res :encoding "UTF-8"))
     (throw (ex-info (str "Rule resource not found on classpath: " resource-path)
                     {:resource-path resource-path}))))
 
@@ -43,7 +43,7 @@
     (if (and (.exists dir) (.isDirectory dir))
       (->> (.listFiles dir)
            (filter #(and (.isFile ^java.io.File %) (.endsWith (.getName ^java.io.File %) ".edn")))
-           (map (comp parse-rule slurp))
+           (map (fn [^java.io.File f] (parse-rule (slurp f :encoding "UTF-8"))))
            (map (juxt :rule/id identity))
            (into {}))
       {})))

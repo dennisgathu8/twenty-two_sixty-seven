@@ -74,6 +74,10 @@ ENV CLOJURE_INSTALLER_SHA256="5f679e004acd3354c5b28d76703d14b96eb9b6d839eaca4f54
     MAILPIT_SHA256_AMD64="87d2652abd7c17dc99029147ff62ac671afdf7fd76630f7faf5b14125211c709" \
     MAILPIT_SHA256_ARM64="be6a1f9dcf0ac0d7157ee777eac2b5351352b367bcae3c0a0f4854da60546884"
 
+# Explicit UTF-8 container locale for JVM and toolchain consistency
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
 # Install Clojure CLI (pinned to 1.12.0.1488 with SHA-256 verification)
 RUN curl -fsSL -O "https://download.clojure.org/install/linux-install-${CLOJURE_VERSION}.sh" \
     && echo "${CLOJURE_INSTALLER_SHA256}  linux-install-${CLOJURE_VERSION}.sh" | sha256sum -c - \
