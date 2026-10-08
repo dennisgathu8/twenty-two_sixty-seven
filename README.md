@@ -62,8 +62,10 @@ clojure -M -e "(set! *warn-on-reflection* true) (require 'bwr.main :reload)"
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `BWR_BIND` | `127.0.0.1` | Local IP literal address to bind http-kit server. Validated with `clojure.spec`. Emits loud warning if non-loopback; refuses startup when `BWR_ENV=test` is active (§9.4, ADR-003). |
+| `BWR_TRUSTED_PROXIES` | *(empty)* | Comma-separated list of trusted upstream proxy IP literals. Validated with `clojure.spec`. When empty, forwarding headers are ignored and `:remote-addr` is used directly (ADR-003). |
 | `BWR_ENV` | *(unset)* | Set to `test` to mount the test magic-link minting endpoint (`POST /test/auth/magic-link`) and relax the session cookie `Secure` flag for local HTTP testing. **Must never run in production (§9, §10).** |
-| `BWR_RATE_LIMIT_MAX` | `100` | Sliding-window maximum request count per client IP. Validated with `clojure.spec` (`pos-int?`). Configured to `10000` during Playwright test runs. |
+| `BWR_RATE_LIMIT_MAX` | `100` | Sliding-window maximum request count per client IP. Validated with `clojure.spec` (`pos-int?`). Configured to `10000` during Playwright test runs. Loud warning banner triggers if effective rate `(max * 60 / window) > 100`. |
 | `BWR_RATE_LIMIT_WINDOW_S` | `60` | Duration of the rate limiter sliding window in seconds. Validated with `clojure.spec` (`pos-int?`). |
 | `LANG` / `LC_ALL` | `C.UTF-8` | Container locale ensuring UTF-8 encoding across stdout, logging banners, and disk I/O. |
 
@@ -79,6 +81,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the governing specification
 4. **Scanner-Safe Authentication (§9.2):** Magic links render a confirmation step (`GET /auth/verify`) before atomic token consumption (`POST /auth/verify`), preventing enterprise email scanners from burning single-use tokens.
 5. **XTDB 1.x Bi-temporal Storage ([ADR-001](docs/adr/ADR-001-xtdb-primary-storage.md)):** Deliberately pinned to XTDB 1.x (embedded, Datalog, RocksDB-backed) to match `temporal-squad`'s proven bi-temporal pattern and keep the architecture 100% self-contained on a single box.
 6. **Discrete Events over Black Boxes ([ADR-002](docs/adr/ADR-002-no-fotmob-scraping.md)):** Strict ingestion from ToS-clean sources (Wikipedia, FBref); no scraping of third-party proprietary momentum widgets.
+7. **Edge Client-IP Attribution ([ADR-003](docs/adr/ADR-003-client-ip-trust.md)):** `wrap-client-ip` edge middleware, loopback default binding, right-to-left header traversal skipping trusted proxies, and DNS-free IP parsing.
 
 ---
 
@@ -110,7 +113,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the governing specification
 ├── docs/
 │   ├── ARCHITECTURE.md       # Governing architecture specification (Steps 1–10)
 │   ├── runbook.md            # Operations runbook (§9.7, §11 — Step 10)
-│   └── adr/                  # Architectural Decision Records (ADR-001, ADR-002)
+│   └── adr/                  # Architectural Decision Records (ADR-001, ADR-002, ADR-003)
 └── README.md
 ```
 

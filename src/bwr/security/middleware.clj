@@ -39,17 +39,162 @@
       (update response :headers merge security-headers))))
 
 ;; ============================================================================
-;; Request Attribution Helpers
+;; IP Literal Validation & Normalization (ADR-003, §9.4)
+;; Never calls InetAddress/getByName on header text (no DNS resolution)
 ;; ============================================================================
 
-(defn extract-client-ip
-  "Extracts the client IP from request headers (x-forwarded-for, x-real-ip) or :remote-addr."
-  [request]
-  (or (when-let [xf (get-in request [:headers "x-forwarded-for"])]
-        (str/trim (first (str/split xf #","))))
-      (get-in request [:headers "x-real-ip"])
-      (:remote-addr request)
-      "127.0.0.1"))
+(defn- strip-brackets
+  [^String s]
+  (if (and (.startsWith s "[") (.endsWith s "]") (> (.length s) 1))
+    (.substring s 1 (dec (.length s)))
+    s))
+
+(defn valid-ipv4?
+  "Returns true if s is a valid IPv4 literal (dotted quad, 0-255 per octet, no leading zeros).
+   Always returns a boolean."
+  [s]
+  (if-not (string? s)
+    false
+    (let [s (str/trim ^String s)]
+      (boolean
+       (when-let [[_ a b c d] (re-matches #"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$" s)]
+         (every? (fn [^String octet]
+                   (and (or (= (.length octet) 1) (not (.startsWith octet "0")))
+                        (<= 0 (Long/parseLong octet) 255)))
+                 [a b c d]))))))
+
+(defn valid-ipv6?
+  "Returns true if s is a valid IPv6 literal (hex words separated by colons, optional :: compression).
+   Always returns a boolean."
+  [s]
+  (if-not (string? s)
+    false
+    (let [clean (-> ^String s str/trim strip-brackets)]
+      (boolean
+       (cond
+         (not (re-matches #"^[0-9a-fA-F:.]+$" clean)) false
+         (not (.contains ^String clean ":")) false
+         (.contains ^String clean ":::") false
+         (> (count (re-seq #"::" clean)) 1) false
+         (= clean "::") true
+
+         :else
+         (let [has-double-colon? (.contains ^String clean "::")
+               [v6-part v4-suffix] (if-let [[_ p1 p2] (re-matches #"^(.*:)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$" clean)]
+                                     [p1 p2]
+                                     [clean nil])]
+           (if (and v4-suffix (not (valid-ipv4? v4-suffix)))
+             false
+             (let [v6-raw ^String v6-part
+                   v6-str (if (and (not (.endsWith v6-raw "::")) (.endsWith v6-raw ":"))
+                            (.substring v6-raw 0 (dec (.length v6-raw)))
+                            v6-raw)
+                   raw-tokens (str/split v6-str #":" -1)
+                   tokens (cond
+                            (= v6-str "::") []
+                            (and (.startsWith v6-str "::") (.endsWith v6-str "::"))
+                            (subvec (vec raw-tokens) 2 (- (count raw-tokens) 2))
+                            (.startsWith v6-str "::")
+                            (subvec (vec raw-tokens) 2)
+                            (.endsWith v6-str "::")
+                            (subvec (vec raw-tokens) 0 (- (count raw-tokens) 2))
+                            :else
+                            raw-tokens)
+                   empty-tokens (filter #(= % "") tokens)
+                   non-empty-tokens (remove #(= % "") tokens)
+                   hex-valid? (every? #(re-matches #"^[0-9a-fA-F]{1,4}$" ^String %) non-empty-tokens)
+                   total-groups (+ (count non-empty-tokens) (if v4-suffix 2 0))]
+               (and hex-valid?
+                    (if has-double-colon?
+                      (and (<= (count empty-tokens) 1)
+                           (< total-groups 8))
+                      (and (zero? (count empty-tokens))
+                           (= total-groups 8))))))))))))
+
+(defn valid-ip-literal?
+  "Returns true if s is a valid IPv4 or IPv6 literal string.
+   Never calls InetAddress/getByName and never performs DNS resolution."
+  [s]
+  (boolean (or (valid-ipv4? s) (valid-ipv6? s))))
+
+(defn normalize-ip
+  "Normalizes an IP string: strips brackets, trims, and lowercases for consistent comparison."
+  [s]
+  (when (string? s)
+    (-> ^String s str/trim strip-brackets str/lower-case)))
+
+(defn loopback-ip?
+  "Returns true if the IP string is a valid loopback address (127.0.0.0/8 or ::1)."
+  [ip]
+  (if-not (valid-ip-literal? ip)
+    false
+    (let [norm ^String (normalize-ip ip)]
+      (boolean
+       (or (= norm "::1")
+           (= norm "0:0:0:0:0:0:0:1")
+           (.startsWith norm "127."))))))
+
+(defn extract-ip-literal
+  "Extracts, normalizes, and validates an IP literal from a candidate string.
+   Handles optional brackets for IPv6 and optional port numbers (e.g. 1.2.3.4:5678 or [::1]:5678).
+   Returns the normalized valid IP literal string, or nil if invalid."
+  [s]
+  (when (string? s)
+    (let [trimmed (str/trim ^String s)
+          candidate (cond
+                      (valid-ip-literal? trimmed) trimmed
+                      (re-matches #"^\[([0-9a-fA-F:.]+)\]:\d+$" trimmed)
+                      (second (re-matches #"^\[([0-9a-fA-F:.]+)\]:\d+$" trimmed))
+                      (re-matches #"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+$" trimmed)
+                      (second (re-matches #"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+$" trimmed))
+                      :else trimmed)]
+      (when (valid-ip-literal? candidate)
+        (normalize-ip candidate)))))
+
+;; ============================================================================
+;; Request Attribution & Edge Client-IP Resolution (§9.4, ADR-003)
+;; ============================================================================
+
+(defn resolve-client-ip
+  "Resolves the client IP for a request given a set of trusted proxy IP literals.
+   Algorithm (§9.4, ADR-003):
+     1. If :remote-addr is not a trusted proxy, use :remote-addr and ignore
+        X-Forwarded-For and X-Real-IP entirely.
+     2. If :remote-addr is a trusted proxy, walk X-Forwarded-For from the right,
+        skipping trusted proxies, and take the first valid untrusted IP literal.
+        If X-Forwarded-For is absent or yields no untrusted address, check X-Real-IP.
+     3. If no valid untrusted address is found, fall back to :remote-addr.
+     4. Store only validated IP literals, with 'unknown' as final fallback."
+  ([request] (resolve-client-ip request #{}))
+  ([request trusted-proxies]
+   (let [trusted-set (if (set? trusted-proxies)
+                       (into #{} (keep normalize-ip trusted-proxies))
+                       #{})
+         remote-ip (extract-ip-literal (:remote-addr request))
+         remote-trusted? (and (some? remote-ip) (contains? trusted-set remote-ip))]
+     (if-not remote-trusted?
+       (or remote-ip "unknown")
+       ;; :remote-addr is a trusted proxy: walk X-Forwarded-For from the right
+       (let [xf (get-in request [:headers "x-forwarded-for"])
+             candidates (when (string? xf)
+                          (keep extract-ip-literal (reverse (str/split xf #","))))
+             first-untrusted (first (remove #(contains? trusted-set %) candidates))]
+         (or first-untrusted
+             (when-let [xrip (extract-ip-literal (get-in request [:headers "x-real-ip"]))]
+               (when-not (contains? trusted-set xrip)
+                 xrip))
+             remote-ip
+             "unknown"))))))
+
+(defn wrap-client-ip
+  "Edge middleware that computes the client IP once using resolve-client-ip
+   and attaches it to the request under :bwr/client-ip.
+   Every downstream middleware and handler reads (:bwr/client-ip request)."
+  ([handler] (wrap-client-ip handler #{}))
+  ([handler trusted-proxies]
+   (fn [request]
+     (let [client-ip (resolve-client-ip request trusted-proxies)]
+       (handler (assoc request :bwr/client-ip client-ip))))))
 
 ;; ============================================================================
 ;; Containment Levers: Live IP Banning (§9.4, §9.7)
@@ -103,7 +248,7 @@
   ([handler] (wrap-ip-containment handler nil))
   ([handler node]
    (fn [request]
-     (let [ip (extract-client-ip request)]
+     (let [ip (or (:bwr/client-ip request) (extract-ip-literal (:remote-addr request)) "unknown")]
        (if (ip-banned? ip)
          (do
            (when node
@@ -171,7 +316,7 @@
   ([handler limiter] (wrap-rate-limit handler limiter nil))
   ([handler limiter node]
    (fn [request]
-     (let [ip (extract-client-ip request)
+     (let [ip (or (:bwr/client-ip request) (extract-ip-literal (:remote-addr request)) "unknown")
            {:keys [allowed? reset-seconds]} (check-rate-limit! limiter ip)]
        (if allowed?
          (handler request)

@@ -87,3 +87,80 @@
         (is (clojure.string/includes? body-str "Rate limit exceeded")))
       (finally
         (main/stop!)))))
+
+(deftest trusted-proxies-config-test
+  (testing "Defaults to empty set when environment variable is unset or blank"
+    (is (= #{} (main/resolve-trusted-proxies {})))
+    (is (= #{} (main/resolve-trusted-proxies {"BWR_TRUSTED_PROXIES" ""})))
+    (is (= #{} (main/resolve-trusted-proxies {"BWR_TRUSTED_PROXIES" "   "}))))
+
+  (testing "Parses comma-separated list of valid IPv4 and IPv6 literals"
+    (is (= #{"127.0.0.1" "10.0.0.1"}
+           (main/resolve-trusted-proxies {"BWR_TRUSTED_PROXIES" "127.0.0.1, 10.0.0.1"})))
+    (is (= #{"127.0.0.1" "::1" "192.168.1.1"}
+           (main/resolve-trusted-proxies {"BWR_TRUSTED_PROXIES" "127.0.0.1, ::1, 192.168.1.1"}))))
+
+  (testing "Throws ExceptionInfo when any entry in BWR_TRUSTED_PROXIES is not a valid IP literal"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a valid IP literal"
+                          (main/resolve-trusted-proxies {"BWR_TRUSTED_PROXIES" "127.0.0.1, not-an-ip"})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a valid IP literal"
+                          (main/resolve-trusted-proxies {"BWR_TRUSTED_PROXIES" "300.1.1.1"})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a valid IP literal"
+                          (main/resolve-trusted-proxies {"BWR_TRUSTED_PROXIES" "<script>alert(1)</script>"})))))
+
+(deftest bind-address-config-test
+  (testing "Defaults to 127.0.0.1 loopback when unset or blank"
+    (is (= "127.0.0.1" (main/resolve-bind-address {})))
+    (is (= "127.0.0.1" (main/resolve-bind-address {"BWR_BIND" ""})))
+    (is (= "127.0.0.1" (main/resolve-bind-address {"BWR_BIND" "   "}))))
+
+  (testing "Parses valid IP literal strings"
+    (is (= "127.0.0.2" (main/resolve-bind-address {"BWR_BIND" "127.0.0.2"})))
+    (is (= "0.0.0.0" (main/resolve-bind-address {"BWR_BIND" "0.0.0.0"})))
+    (is (= "::1" (main/resolve-bind-address {"BWR_BIND" "::1"})))
+    (is (= "::1" (main/resolve-bind-address {"BWR_BIND" "[::1]"}))))
+
+  (testing "Throws ExceptionInfo when BWR_BIND is not a valid IP literal"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a valid IP literal"
+                          (main/resolve-bind-address {"BWR_BIND" "not-an-ip"})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a valid IP literal"
+                          (main/resolve-bind-address {"BWR_BIND" "300.1.1.1"})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a valid IP literal"
+                          (main/resolve-bind-address {"BWR_BIND" "<script>"})))))
+
+(deftest test-mode-non-loopback-bind-guard-test
+  (testing "Refuses to start with clear ExceptionInfo if BWR_ENV=test and bind address is not loopback"
+    (with-redefs [bwr.auth.session/test-environment? (constantly true)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot be bound to non-loopback"
+                            (main/start! {:bind "0.0.0.0" :port 3000 :topology :in-memory})))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot be bound to non-loopback"
+                            (main/start! {:bind "192.168.1.50" :port 3000 :topology :in-memory}))))))
+
+(deftest relaxed-rate-limit-detection-test
+  (testing "Detects relaxed rate limit by effective rate (max * 60 / window > 100)"
+    ;; Exactly 100 req/min -> not relaxed
+    (is (false? (main/relaxed-rate-limit? {:max-requests 100 :window-seconds 60})))
+    (is (false? (main/relaxed-rate-limit? {:max-requests 200 :window-seconds 120})))
+    (is (false? (main/relaxed-rate-limit? {:max-requests 10 :window-seconds 6})))
+
+    ;; Under 100 req/min -> not relaxed
+    (is (false? (main/relaxed-rate-limit? {:max-requests 50 :window-seconds 60})))
+
+    ;; Over 100 req/min -> relaxed!
+    (is (true? (main/relaxed-rate-limit? {:max-requests 100 :window-seconds 1})))   ; 6000 req/min
+    (is (true? (main/relaxed-rate-limit? {:max-requests 50 :window-seconds 10})))   ; 300 req/min
+    (is (true? (main/relaxed-rate-limit? {:max-requests 10000 :window-seconds 60}))) ; 10000 req/min
+    (is (true? (main/relaxed-rate-limit? {:max-requests 201 :window-seconds 120})))) ; 100.5 req/min
+
+  (testing "Emits loud banner when effective rate exceeds threshold"
+    (let [out-str (with-out-str
+                    (binding [*err* *out*]
+                      (#'main/log-rate-limiter-config! {:max-requests 100 :window-seconds 1})))]
+      (is (clojure.string/includes? out-str "ATTENTION: RELAXED RATE LIMIT CONFIGURED AT STARTUP!"))
+      (is (clojure.string/includes? out-str "100 REQS / 1S (~6000 REQS/MIN)")))
+
+    (let [out-str (with-out-str
+                    (binding [*err* *out*]
+                      (#'main/log-rate-limiter-config! {:max-requests 100 :window-seconds 60})))]
+      (is (not (clojure.string/includes? out-str "ATTENTION: RELAXED RATE LIMIT CONFIGURED AT STARTUP!")))
+      (is (clojure.string/includes? out-str "Rate limiter active: 100 requests per 60s.")))))

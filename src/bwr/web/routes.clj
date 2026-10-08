@@ -250,7 +250,7 @@
       (layout/error-response 400 "Bad Request" "Malformed magic link authentication token format.")
 
       :else
-      (let [client-ip (sec/extract-client-ip request)
+      (let [client-ip (or (:bwr/client-ip request) (:remote-addr request) "unknown")
             res (session/verify-magic-link-and-create-session! node token {:client-ip client-ip})]
         (if (:valid? res)
           (let [session-token (:session-token res)
@@ -273,7 +273,7 @@
     (let [raw-id (or (get-in request [:params :identity])
                      (get-in request [:params "identity"])
                      "head-coach@breakwindow.lan")
-          client-ip (sec/extract-client-ip request)
+          client-ip (or (:bwr/client-ip request) (:remote-addr request) "unknown")
           res (magic-link/generate-magic-link! node {:identity raw-id
                                                      :client-ip client-ip
                                                      :send-email? false})]
@@ -368,7 +368,7 @@
              node
              {:sec-event/type :sec.type/rule-reloaded
               :sec-event/identity (:identity request)
-              :sec-event/client-ip (sec/extract-client-ip request)
+              :sec-event/client-ip (or (:bwr/client-ip request) (:remote-addr request) "unknown")
               :sec-event/status :status/success
               :sec-event/reason :reason/admin-action
               :sec-event/detail {:rule-id (:rule/id rule-doc)
@@ -398,7 +398,7 @@
              node
              {:sec-event/type :sec.type/rule-reload-failed
               :sec-event/identity (:identity request)
-              :sec-event/client-ip (sec/extract-client-ip request)
+              :sec-event/client-ip (or (:bwr/client-ip request) (:remote-addr request) "unknown")
               :sec-event/status :status/failure
               :sec-event/reason :reason/spec-validation-failed
               :sec-event/detail {:rule-id rule-id-str
@@ -412,7 +412,7 @@
            node
            {:sec-event/type :sec.type/rule-reload-failed
             :sec-event/identity (:identity request)
-            :sec-event/client-ip (sec/extract-client-ip request)
+            :sec-event/client-ip (or (:bwr/client-ip request) (:remote-addr request) "unknown")
             :sec-event/status :status/failure
             :sec-event/reason :reason/file-not-found
             :sec-event/detail {:rule-id rule-id-str}})
@@ -466,7 +466,7 @@
              node
              {:sec-event/type :sec.type/data-quality-overridden
               :sec-event/identity (:identity request)
-              :sec-event/client-ip (sec/extract-client-ip request)
+              :sec-event/client-ip (or (:bwr/client-ip request) (:remote-addr request) "unknown")
               :sec-event/status :status/success
               :sec-event/reason :reason/manual-override
               :sec-event/detail {:match-id match-id
@@ -528,11 +528,13 @@
 
 (defn create-app
   "Creates and returns the Ring application handler for public SSR views and admin routes.
-   Wraps with security headers, IP containment, rate-limiting, session cookies, and parameter parsing."
+   Wraps with edge client-IP resolution, security headers, IP containment, rate-limiting,
+   session cookies, and parameter parsing."
   ([node] (create-app node {}))
   ([node opts]
    (let [rate-limiter (or (:rate-limiter opts)
                           (sec/create-rate-limiter {:max-requests 100 :window-seconds 60}))
+         trusted-proxies (or (:trusted-proxies opts) #{})
          router (ring/router (create-routes node)
                              {:data {:middleware [params/parameters-middleware]}})
          app (ring/ring-handler
@@ -546,4 +548,5 @@
          cookies/wrap-cookies
          (sec/wrap-rate-limit rate-limiter node)
          (sec/wrap-ip-containment node)
-         sec/wrap-security-headers))))
+         sec/wrap-security-headers
+         (sec/wrap-client-ip trusted-proxies)))))

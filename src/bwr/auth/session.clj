@@ -307,7 +307,7 @@
      (fn [handler] (wrap-require-auth handler a b))))
   ([handler node opts]
    (fn [request]
-     (let [client-ip (security/extract-client-ip request)
+     (let [client-ip (or (:bwr/client-ip request) (:remote-addr request) "unknown")
            token (extract-session-token request)
            auth-res (when token (verify-session node token opts))]
        (if (and auth-res (:valid? auth-res))
@@ -392,7 +392,7 @@
           node
           {:sec-event/type :sec.type/csrf-rejected
            :sec-event/identity (:identity request)
-           :sec-event/client-ip (security/extract-client-ip request)
+           :sec-event/client-ip (or (:bwr/client-ip request) (:remote-addr request) "unknown")
            :sec-event/status :status/failure
            :sec-event/reason :reason/csrf-token-mismatch
            :sec-event/detail {:uri (:uri request)
