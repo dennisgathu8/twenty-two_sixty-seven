@@ -162,9 +162,12 @@
         X-Forwarded-For and X-Real-IP entirely.
      2. If :remote-addr is a trusted proxy, walk X-Forwarded-For from the right,
         skipping trusted proxies, and take the first valid untrusted IP literal.
-        If X-Forwarded-For is absent or yields no untrusted address, check X-Real-IP.
-     3. If no valid untrusted address is found, fall back to :remote-addr.
-     4. Store only validated IP literals, with 'unknown' as final fallback."
+        If an invalid or blank token is encountered, fail closed immediately and
+        return :remote-addr without reading X-Real-IP.
+     3. If all tokens in X-Forwarded-For are trusted proxies (or header is absent),
+        check X-Real-IP for a valid untrusted address.
+     4. If no valid untrusted address is found, fall back to :remote-addr.
+     5. Store only validated IP literals, with 'unknown' as final fallback."
   ([request] (resolve-client-ip request #{}))
   ([request trusted-proxies]
    (let [trusted-set (if (set? trusted-proxies)
@@ -176,15 +179,29 @@
        (or remote-ip "unknown")
        ;; :remote-addr is a trusted proxy: walk X-Forwarded-For from the right
        (let [xf (get-in request [:headers "x-forwarded-for"])
-             candidates (when (string? xf)
-                          (keep extract-ip-literal (reverse (str/split xf #","))))
-             first-untrusted (first (remove #(contains? trusted-set %) candidates))]
-         (or first-untrusted
-             (when-let [xrip (extract-ip-literal (get-in request [:headers "x-real-ip"]))]
-               (when-not (contains? trusted-set xrip)
-                 xrip))
-             remote-ip
-             "unknown"))))))
+             xf-result (when (string? xf)
+                         (loop [tokens (reverse (str/split xf #"," -1))]
+                           (if-let [[tok & more] (seq tokens)]
+                             (let [ip (extract-ip-literal tok)]
+                               (cond
+                                 (nil? ip)                  ::stop        ; invalid token: fail closed
+                                 (contains? trusted-set ip) (recur more)  ; trusted hop: keep walking
+                                 :else                      ip))          ; first untrusted valid address
+                             ::exhausted)))]
+         (cond
+           (= xf-result ::stop)
+           (or remote-ip "unknown")
+
+           (string? xf-result)
+           xf-result
+
+           :else
+           ;; Tokens exhausted or X-Forwarded-For absent
+           (or (when-let [xrip (extract-ip-literal (get-in request [:headers "x-real-ip"]))]
+                 (when-not (contains? trusted-set xrip)
+                   xrip))
+               remote-ip
+               "unknown")))))))
 
 (defn wrap-client-ip
   "Edge middleware that computes the client IP once using resolve-client-ip

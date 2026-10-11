@@ -241,7 +241,49 @@
 
   (testing "Fallback to 'unknown' when remote-addr is nil or invalid"
     (let [req {:headers {"x-forwarded-for" "1.2.3.4"}}]
-      (is (= "unknown" (sec/resolve-client-ip req #{}))))))
+      (is (= "unknown" (sec/resolve-client-ip req #{})))))
+
+  (testing "X-Forwarded-For traversal fails closed on invalid tokens (fail-closed walk)"
+    ;; 1. Garbage left of real client is never reached
+    (let [req {:remote-addr "127.0.0.1"
+               :headers {"x-forwarded-for" "6.6.6.6, garbage, 203.0.113.5"}}
+          trusted-proxies #{"127.0.0.1"}]
+      (is (= "203.0.113.5" (sec/resolve-client-ip req trusted-proxies))))
+
+    ;; 2. Invalid rightmost token fails closed and returns remote-addr (not 203.0.113.5, not 6.6.6.6)
+    (let [req {:remote-addr "127.0.0.1"
+               :headers {"x-forwarded-for" "6.6.6.6, 203.0.113.5, garbage"}}
+          trusted-proxies #{"127.0.0.1"}]
+      (is (= "127.0.0.1" (sec/resolve-client-ip req trusted-proxies))))
+
+    ;; 3. Skips trusted proxy on right, hits invalid token, fails closed to remote-addr (not 6.6.6.6)
+    (let [req {:remote-addr "127.0.0.1"
+               :headers {"x-forwarded-for" "6.6.6.6, garbage, 127.0.0.2"}}
+          trusted-proxies #{"127.0.0.1" "127.0.0.2"}]
+      (is (= "127.0.0.1" (sec/resolve-client-ip req trusted-proxies))))
+
+    ;; 4. Trailing comma yields blank token and fails closed to remote-addr
+    (let [req {:remote-addr "127.0.0.1"
+               :headers {"x-forwarded-for" "6.6.6.6, 203.0.113.5,"}}
+          trusted-proxies #{"127.0.0.1"}]
+      (is (= "127.0.0.1" (sec/resolve-client-ip req trusted-proxies))))
+
+    ;; 5. Invalid token stops the walk BEFORE X-Real-IP is consulted
+    (let [req {:remote-addr "127.0.0.1"
+               :headers {"x-forwarded-for" "6.6.6.6, 203.0.113.5, garbage"
+                         "x-real-ip" "9.9.9.9"}}
+          trusted-proxies #{"127.0.0.1"}]
+      (is (= "127.0.0.1" (sec/resolve-client-ip req trusted-proxies))))
+    (let [req {:remote-addr "127.0.0.1"
+               :headers {"x-forwarded-for" "6.6.6.6, garbage, 127.0.0.2"
+                         "x-real-ip" "9.9.9.9"}}
+          trusted-proxies #{"127.0.0.1" "127.0.0.2"}]
+      (is (= "127.0.0.1" (sec/resolve-client-ip req trusted-proxies))))
+    (let [req {:remote-addr "127.0.0.1"
+               :headers {"x-forwarded-for" "6.6.6.6, 203.0.113.5,"
+                         "x-real-ip" "9.9.9.9"}}
+          trusted-proxies #{"127.0.0.1"}]
+      (is (= "127.0.0.1" (sec/resolve-client-ip req trusted-proxies))))))
 
 (deftest rate-limiting-ip-spoof-containment-test
   (testing "Two requests from one untrusted remote with different spoofed headers share a single rate-limit bucket"
