@@ -11,7 +11,7 @@ CANARY_LOG="/tmp/canary_audit.log"
 echo "Running canary vulnerability scan against ${CANARY_DIR}/deps.edn..."
 
 set +e
-(cd "${CANARY_DIR}" && clojure -M:clj-watson --database-strategy github-advisory --cvss-fail-threshold 7.0 -f) > "${CANARY_LOG}" 2>&1
+(cd "${CANARY_DIR}" && clojure -M:clj-watson scan -p deps.edn --database-strategy github-advisory --cvss-fail-threshold 7.0) > "${CANARY_LOG}" 2>&1
 CANARY_STATUS=$?
 set -e
 

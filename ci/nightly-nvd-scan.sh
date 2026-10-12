@@ -18,7 +18,7 @@ echo "==========================================================================
 
 NVD_LOG="/tmp/nvd_audit.log"
 set +e
-clojure -M:clj-watson --database-strategy dependency-check --cvss-fail-threshold 7.0 -f > "${NVD_LOG}" 2>&1
+clojure -M:clj-watson scan -p deps.edn --database-strategy dependency-check --cvss-fail-threshold 7.0 > "${NVD_LOG}" 2>&1
 NVD_STATUS=$?
 set -e
 
