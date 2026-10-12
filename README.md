@@ -131,5 +131,5 @@ Defined in [docs/ARCHITECTURE.md §13](docs/ARCHITECTURE.md#13-build-sequence-fo
 * [x] **Step 6:** `bwr.auth` + `bwr.security` (§9)
 * [x] **Step 7:** `bwr.web` admin routes (§8, §9)
 * [x] **Step 8:** E2E Playwright test suite (§10)
-* [ ] **Step 9:** CI/CD + CVE gate (§11)
+* [x] **Step 9:** CI/CD + CVE gate (§11)
 * [ ] **Step 10:** Deploy to the box, drill backup/restore, write the runbook (§9.7, §11)

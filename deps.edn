@@ -32,5 +32,10 @@
     ring/ring-mock {:mvn/version "0.4.0"}}
    :main-opts ["-m" "bwr.test-runner"]}
 
+  :clj-watson
+  {:replace-deps {io.github.clj-holmes/clj-watson {:git/tag "v6.1.0"
+                                                   :git/sha "be98e4db74fb8927db4825cc73bbe2606e44e5e3"}}
+   :main-opts ["-m" "clj-watson.cli"]}
+
   :repl
   {:main-opts ["-m" "nrepl.cmdline" "--interactive"]}}}

@@ -1,0 +1,93 @@
+name: Nightly Security Audit & Test
+
+on:
+  schedule:
+    # Run every night at 03:00 UTC (§11, ADR-004)
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nightly-audit:
+    name: nightly-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Guard against BWR_ENV leakage
+        run: bash ci/guard-bwr-env.sh
+
+      - name: Set up Temurin JDK 17
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '17.0.20'
+
+      - name: Set up Node.js (pinned to 22.14.0)
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        with:
+          node-version: '22.14.0'
+
+      - name: Cache Maven and Clojure classpath
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.cpcache
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
+          restore-keys: |
+            ${{ runner.os }}-clojure-
+
+      - name: Cache npm packages
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Compute weekly cache key for NVD database
+        id: nvd-cache-key
+        run: echo "week=$(date +'%Y-%U')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache NVD vulnerability database (weekly rotating)
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-utils
+          key: ${{ runner.os }}-nvd-data-${{ steps.nvd-cache-key.outputs.week }}
+          restore-keys: |
+            ${{ runner.os }}-nvd-data-
+
+      - name: Install Clojure CLI (pinned to 1.12.0.1488)
+        run: bash ci/install-clojure.sh
+
+      - name: Install npm dependencies (ignore-scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Verify scanner canary fixture
+        run: bash ci/test-canary.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run GitHub Advisory CVE audit
+        run: bash ci/cve-gate.sh github-advisory
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run deep NIST NVD dependency audit (conditional on secret)
+        run: bash ci/nightly-nvd-scan.sh
+        env:
+          CLJ_WATSON_NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+
+      - name: Run test suite
+        run: clojure -M:test

@@ -11,6 +11,7 @@
             [ring.mock.request :as mock]
             [bwr.store.node :as store-node]
             [bwr.store.query :as store-query]
+            [bwr.auth.session :as session]
             [bwr.web.views.layout :as layout]
             [bwr.web.routes :as routes]))
 
@@ -257,6 +258,29 @@
       (testing "Unmapped route returns 404"
         (let [resp (app (mock/request :get "/completely-bogus-route"))]
           (is (= 404 (:status resp))))))))
+
+(deftest test-route-environment-gating-test
+  (testing "POST /test/auth/magic-link route presence and 404 gating based on test-environment? (§9.2, §10)"
+    (testing "When test-environment? is false: route is absent from route table and returns 404"
+      (with-redefs [session/test-environment? (constantly false)]
+        (let [route-table (routes/create-routes *node*)
+              route-entry (some (fn [r] (when (and (vector? r) (= "/test/auth/magic-link" (first r))) r))
+                                route-table)
+              app (routes/create-app *node*)
+              resp (app (mock/request :post "/test/auth/magic-link"))]
+          (is (nil? route-entry) "Route table must not contain /test/auth/magic-link when test-environment? is false")
+          (is (= 404 (:status resp)) "POST /test/auth/magic-link must return 404 when test-environment? is false"))))
+
+    (testing "When test-environment? is true: route is present in route table and returns 200"
+      (with-redefs [session/test-environment? (constantly true)]
+        (let [route-table (routes/create-routes *node*)
+              route-entry (some (fn [r] (when (and (vector? r) (= "/test/auth/magic-link" (first r))) r))
+                                route-table)
+              app (routes/create-app *node*)
+              resp (app (mock/request :post "/test/auth/magic-link"))]
+          (is (some? route-entry) "Route table must contain /test/auth/magic-link when test-environment? is true")
+          (is (= 200 (:status resp)) "POST /test/auth/magic-link must return 200 when test-environment? is true")
+          (is (str/includes? (:body resp) "\"status\":\"ok\"")))))))
 
 ;; ============================================================================
 ;; 3. Explicit 400 Bad Request Handling (Boundary Validation §9.1)

@@ -1,0 +1,231 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Guard against BWR_ENV leakage in non-E2E job
+        run: bash ci/guard-bwr-env.sh
+
+      - name: Run shellcheck over CI shell scripts
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck ci/*.sh
+
+      - name: Set up Temurin JDK 17
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '17.0.20'
+
+      - name: Cache Maven and Clojure classpath
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.cpcache
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
+          restore-keys: |
+            ${{ runner.os }}-clojure-
+
+      - name: Install Clojure CLI (pinned to 1.12.0.1488)
+        run: bash ci/install-clojure.sh
+
+      - name: Execute Compile Gate (strict reflection filtering under bwr/)
+        run: bash ci/compile-gate.sh
+
+  unit:
+    name: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Guard against BWR_ENV leakage in non-E2E job
+        run: bash ci/guard-bwr-env.sh
+
+      - name: Set up Temurin JDK 17
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '17.0.20'
+
+      - name: Cache Maven and Clojure classpath
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.cpcache
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
+          restore-keys: |
+            ${{ runner.os }}-clojure-
+
+      - name: Install Clojure CLI (pinned to 1.12.0.1488)
+        run: bash ci/install-clojure.sh
+
+      - name: Run unit and generative tests
+        run: clojure -M:test
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Temurin JDK 17
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '17.0.20'
+
+      - name: Set up Node.js (pinned to 22.14.0)
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        with:
+          node-version: '22.14.0'
+
+      - name: Cache Maven and Clojure classpath
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.cpcache
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
+          restore-keys: |
+            ${{ runner.os }}-clojure-
+
+      - name: Cache npm packages
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Install Clojure CLI (pinned to 1.12.0.1488)
+        run: bash ci/install-clojure.sh
+
+      - name: Install npm dependencies (ignore-scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Install Playwright Chromium explicitly
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E test suite
+        run: npx playwright test
+
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: playwright-failure-artifacts
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+  deps-audit:
+    name: deps-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Guard against BWR_ENV leakage in non-E2E job
+        run: bash ci/guard-bwr-env.sh
+
+      - name: Set up Temurin JDK 17
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '17.0.20'
+
+      - name: Set up Node.js (pinned to 22.14.0)
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        with:
+          node-version: '22.14.0'
+
+      - name: Cache Maven and Clojure classpath
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.cpcache
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
+          restore-keys: |
+            ${{ runner.os }}-clojure-
+
+      - name: Cache npm packages
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Install Clojure CLI (pinned to 1.12.0.1488)
+        run: bash ci/install-clojure.sh
+
+      - name: Verify scanner canary (proves CVE scanner fails on vulnerabilities)
+        run: bash ci/test-canary.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run CVE Dependency Gate (npm audit + clj-watson)
+        run: bash ci/cve-gate.sh github-advisory
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  ci-gate:
+    name: ci-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: [compile, unit, e2e, deps-audit]
+    if: always()
+    steps:
+      - name: Verify aggregate status across all gates
+        run: |
+          echo "Verifying individual gate results:"
+          echo " - compile:    ${{ needs.compile.result }}"
+          echo " - unit:       ${{ needs.unit.result }}"
+          echo " - e2e:        ${{ needs.e2e.result }}"
+          echo " - deps-audit: ${{ needs.deps-audit.result }}"
+
+          if [ "${{ needs.compile.result }}" != "success" ] || \
+             [ "${{ needs.unit.result }}" != "success" ] || \
+             [ "${{ needs.e2e.result }}" != "success" ] || \
+             [ "${{ needs.deps-audit.result }}" != "success" ]; then
+            echo "ERROR: One or more required CI gate jobs failed." >&2
+            exit 1
+          fi
+
+          echo "All CI gates PASSED successfully. Status: green."

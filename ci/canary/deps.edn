@@ -1,0 +1,11 @@
+{:paths []
+ :deps
+ {org.clojure/clojure {:mvn/version "1.12.0"}
+  ;; Known critical vulnerability: CVE-2022-42889 (CVSS 9.8) / GHSA-599f-7c49-w659 Text4Shell
+  org.apache.commons/commons-text {:mvn/version "1.9"}}
+
+ :aliases
+ {:clj-watson
+  {:replace-deps {io.github.clj-holmes/clj-watson {:git/tag "v6.1.0"
+                                                   :git/sha "be98e4db74fb8927db4825cc73bbe2606e44e5e3"}}
+   :main-opts ["-m" "clj-watson.cli"]}}}

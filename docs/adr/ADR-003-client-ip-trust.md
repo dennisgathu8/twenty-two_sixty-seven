@@ -61,3 +61,22 @@ This ensures that configurations such as `BWR_RATE_LIMIT_MAX=100 BWR_RATE_LIMIT_
 - Direct attacks against port 3000 cannot spoof client IPs; unforwarded requests are attributed strictly to `:remote-addr`.
 - In devcontainer and production environments, Caddy and Playwright communicate via loopback (`127.0.0.1`), preserving existing developer workflows and E2E test runs without configuration changes.
 - **Operational Requirement for Step 10:** In production deployment (Step 10), Caddy's upstream proxy relationship must be explicitly declared via `trusted_proxies` in the `Caddyfile`, and Caddy's header stripping behavior must be empirically verified with real requests rather than assumed from documentation.
+
+## Follow-ups for Step 10
+
+Three additional hardening items were identified during security review and are recorded here for production deployment (Step 10):
+
+1. **Fail closed on malformed `X-Forwarded-For` (Resolved in Step 8 hardening):**
+   When walking `X-Forwarded-For` from the right (the proxy's append side), the first invalid token stops the walk immediately and falls back to `:remote-addr`. Attacker-supplied entries further to the left can never be reached or evaluated once a malformed element is encountered.
+
+2. **Canonicalize before comparing:**
+   Currently, trusted-proxy matching compares normalized strings. Consequently, representations such as `::1` vs `0:0:0:0:0:0:0:1`, or `::ffff:1.2.3.4` vs `1.2.3.4`, will not match each other. While a mismatch fails closed (falling back to `:remote-addr`), it would attribute all traffic to the proxy's single bucket under proxy setups using alternate IP notation. Step 10 should parse candidate addresses into canonical `InetAddress` or byte representations after strict literal syntax validation before comparing against the trusted set.
+
+3. **Bound the rate limiter's memory:**
+   The current in-memory per-IP sliding-window atom does not evict stale keys. A client rotating across many addresses (specifically across IPv6 `/64` subnets) can grow memory usage unbounded. Step 10 should implement:
+   - Periodic background eviction of expired sliding windows.
+   - An explicit cap on maximum tracked IP entries (with LRU eviction).
+   - Subnet bucketing for IPv6 (e.g. aggregating requests by `/64` prefix rather than individual `/128` addresses).
+
+Additionally, the Step 10 production `Caddyfile` must proxy to `127.0.0.1:3000` explicitly (because the application is bound strictly to IPv4 loopback), and `BWR_TRUSTED_PROXIES` in the production environment must match the exact IP address that Caddy presents on connection to http-kit.
+
