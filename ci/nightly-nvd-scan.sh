@@ -14,6 +14,7 @@ fi
 
 echo "================================================================================"
 echo "Executing nightly deep NIST NVD dependency scan..."
+echo "NVD_API_KEY detected in environment (length: ${#CLJ_WATSON_NVD_API_KEY} chars). Passing to clj-watson."
 echo "================================================================================"
 
 NVD_LOG="/tmp/nvd_audit.log"

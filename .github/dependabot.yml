@@ -1,13 +1,17 @@
 version: 2
 updates:
-  # Maintain SHA-pinned GitHub Actions workflows
+  # Maintain SHA-pinned GitHub Actions workflows (grouped into a single PR)
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     commit-message:
       prefix: "ci(actions)"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   # Maintain Playwright and devDependencies in package.json
   - package-ecosystem: "npm"
@@ -16,7 +20,7 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "deps(npm)"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
 
   # Maintain .devcontainer Dockerfile base images and dependencies
   - package-ecosystem: "docker"
@@ -25,4 +29,4 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "ci(docker)"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3

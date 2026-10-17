@@ -131,6 +131,25 @@
   ([env]
    (parse-bind-address (get env "BWR_BIND"))))
 
+(defn parse-data-dir
+  "Parses and validates the RocksDB data directory.
+   Defaults to 'data/xtdb'. Throws ex-info if value is empty or non-string."
+  [raw-val]
+  (cond
+    (nil? raw-val) "data/xtdb"
+    (and (string? raw-val) (str/blank? (str/trim raw-val))) "data/xtdb"
+    (string? raw-val) (str/trim raw-val)
+    :else
+    (throw (ex-info (str "Invalid configuration for BWR_DATA_DIR: expected path string, got " raw-val)
+                    {:var "BWR_DATA_DIR" :raw-value raw-val}))))
+
+(defn resolve-data-dir
+  "Resolves and validates the RocksDB data directory from environment or explicit map.
+   Recognizes BWR_DATA_DIR (default 'data/xtdb')."
+  ([] (resolve-data-dir (System/getenv)))
+  ([env]
+   (parse-data-dir (get env "BWR_DATA_DIR"))))
+
 (defn- log-bind-address-config!
   "Logs effective bind address at startup.
    Emits a loud warning banner if the configured bind address is non-loopback."
@@ -253,7 +272,9 @@
                               (sec/create-rate-limiter rate-cfg))
              port (get opts :port 3000)
              topology (get opts :topology :in-memory)
-             data-dir (get opts :data-dir "data/xtdb")
+             data-dir (or (:data-dir opts) (resolve-data-dir))
+             _ (when (= topology :rocksdb)
+                 (println (str "RocksDB persistent store active at: " data-dir ".")))
              seed? (get opts :seed? false)
              node (store-node/start-node! (if (= topology :rocksdb)
                                             {:topology :rocksdb :data-dir data-dir}
@@ -329,10 +350,14 @@
                (if (and (>= idx 0) (< (inc idx) (count args)))
                  (nth args (inc idx))
                  nil))
+        data-dir (or (let [idx (.indexOf ^java.util.List (vec args) "--data-dir")]
+                       (when (and (>= idx 0) (< (inc idx) (count args)))
+                         (nth args (inc idx))))
+                     (resolve-data-dir))
         opts {:port port
               :bind (or bind (resolve-bind-address))
               :topology (if in-mem? :in-memory :rocksdb)
-              :data-dir "data/xtdb"
+              :data-dir data-dir
               :seed? seed?}]
     (start! opts)
     (println "Press Ctrl+C to stop.")

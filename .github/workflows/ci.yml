@@ -89,6 +89,9 @@ jobs:
       - name: Run unit and generative tests
         run: clojure -M:test
 
+      - name: Run RocksDB persistence smoke test
+        run: bash ci/rocksdb-smoke.sh
+
   e2e:
     name: e2e
     runs-on: ubuntu-24.04
@@ -199,6 +202,9 @@ jobs:
         run: bash ci/test-canary.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify CVE gate decision logic (offline fixture-based test suite)
+        run: bash ci/test-filter.sh
 
       - name: Run CVE Dependency Gate (npm audit + clj-watson)
         run: bash ci/cve-gate.sh github-advisory

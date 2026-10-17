@@ -17,7 +17,8 @@ jobs:
   nightly-audit:
     name: nightly-audit
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # Generous 90m timeout to permit initial full NIST NVD database seeding without job cancellation
+    timeout-minutes: 90
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -60,8 +61,8 @@ jobs:
         id: nvd-cache-key
         run: echo "week=$(date +'%Y-%U')" >> "$GITHUB_OUTPUT"
 
-      - name: Cache NVD vulnerability database (weekly rotating)
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      - name: Restore NVD vulnerability database cache
+        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: ~/.m2/repository/org/owasp/dependency-check-utils
           key: ${{ runner.os }}-nvd-data-${{ steps.nvd-cache-key.outputs.week }}
@@ -89,5 +90,36 @@ jobs:
         env:
           CLJ_WATSON_NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
 
+      - name: Validate NVD database cache before saving
+        if: always()
+        run: |
+          NVD_DIR="${HOME}/.m2/repository/org/owasp/dependency-check-utils"
+          if [ ! -d "${NVD_DIR}" ]; then
+            echo "ERROR: NVD database directory ${NVD_DIR} does not exist!" >&2
+            exit 1
+          fi
+          echo "NVD cache directory disk usage:"
+          du -sh "${NVD_DIR}"
+          COUNT=$(find "${NVD_DIR}" -type f | wc -l)
+          if [ "${COUNT}" -eq 0 ]; then
+            echo "ERROR: NVD database directory ${NVD_DIR} contains 0 files! Refusing to save empty cache." >&2
+            exit 1
+          fi
+          echo "NVD database directory verified: ${COUNT} files present."
+
+      - name: Save NVD vulnerability database cache (persists even on partial progress)
+        if: always()
+        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-utils
+          key: ${{ runner.os }}-nvd-data-${{ steps.nvd-cache-key.outputs.week }}
+
       - name: Run test suite
         run: clojure -M:test
+
+      - name: Alert on nightly workflow failure or cancellation
+        if: failure() || cancelled()
+        run: |
+          echo "::error title=Nightly Security Audit FAILED::Nightly security workflow failed or was cancelled. Check NVD API key and job logs."
+          echo "CRITICAL: Nightly workflow execution failed with conclusion: ${{ job.status }}" >&2
+          exit 1

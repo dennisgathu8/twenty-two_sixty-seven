@@ -1,0 +1,24 @@
+[
+  {
+    "dependency": "foo.bar/sample-lib",
+    "mvn/version": "1.0.0",
+    "paths": ["/tmp/sample-lib-1.0.0.jar"],
+    "vulnerabilities": [
+      {
+        "vulnerableVersionRange": "< 2.0.0",
+        "advisory": {
+          "summary": "Sample high vulnerability for test filter verification",
+          "severity": "HIGH",
+          "cvss": {
+            "score": 8.5
+          },
+          "identifiers": [
+            {
+              "value": "CVE-2099-0001"
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

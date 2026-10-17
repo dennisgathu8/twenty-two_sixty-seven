@@ -1,0 +1,10 @@
+[{:id "CVE-2022-42889"
+  :ecosystem :maven
+  :package "org.apache.commons/commons-text"
+  :justification "Canary positive-control fixture exception proving allowlist passes (§11, ADR-004)"
+  :expires-on "2099-12-31"}
+ {:id "CVE-2025-48924"
+  :ecosystem :maven
+  :package "org.apache.commons/commons-text"
+  :justification "Canary positive-control fixture exception proving allowlist passes (§11, ADR-004)"
+  :expires-on "2099-12-31"}]

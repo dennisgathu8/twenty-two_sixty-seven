@@ -128,6 +128,16 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a valid IP literal"
                           (main/resolve-bind-address {"BWR_BIND" "<script>"})))))
 
+(deftest data-dir-config-test
+  (testing "Defaults to 'data/xtdb' when unset or blank"
+    (is (= "data/xtdb" (main/resolve-data-dir {})))
+    (is (= "data/xtdb" (main/resolve-data-dir {"BWR_DATA_DIR" ""})))
+    (is (= "data/xtdb" (main/resolve-data-dir {"BWR_DATA_DIR" "   "}))))
+
+  (testing "Parses configured directory paths"
+    (is (= "/tmp/custom-xtdb" (main/resolve-data-dir {"BWR_DATA_DIR" "/tmp/custom-xtdb"})))
+    (is (= "var/data" (main/resolve-data-dir {"BWR_DATA_DIR" " var/data "})))))
+
 (deftest test-mode-non-loopback-bind-guard-test
   (testing "Refuses to start with clear ExceptionInfo if BWR_ENV=test and bind address is not loopback"
     (with-redefs [bwr.auth.session/test-environment? (constantly true)]

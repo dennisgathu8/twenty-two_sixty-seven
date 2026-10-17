@@ -1,0 +1,5 @@
+[{:id "CVE-2099-0001"
+  :ecosystem :maven
+  :package "foo.bar/sample-lib"
+  :justification "Expired exception for decision logic verification"
+  :expires-on "2020-01-01"}]
