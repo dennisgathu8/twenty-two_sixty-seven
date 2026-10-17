@@ -23,6 +23,7 @@
   org.bouncycastle/bcprov-jdk18on {:mvn/version "1.85"}
   org.bouncycastle/bcpkix-jdk18on {:mvn/version "1.85"}
   org.bouncycastle/bcutil-jdk18on {:mvn/version "1.85"}
+  io.airlift/aircompressor {:mvn/version "2.0.3"}
   org.clojure/data.csv {:mvn/version "1.1.0"}
   org.clojure/data.json {:mvn/version "2.5.1"}
   org.clojure/tools.logging {:mvn/version "1.3.0"}
