@@ -65,8 +65,9 @@ jobs:
         uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: ~/.m2/repository/org/owasp/dependency-check-utils
-          key: ${{ runner.os }}-nvd-data-${{ steps.nvd-cache-key.outputs.week }}
+          key: ${{ runner.os }}-nvd-data-${{ steps.nvd-cache-key.outputs.week }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-nvd-data-${{ steps.nvd-cache-key.outputs.week }}-
             ${{ runner.os }}-nvd-data-
 
       - name: Install Clojure CLI (pinned to 1.12.0.1488)
@@ -91,6 +92,7 @@ jobs:
           CLJ_WATSON_NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
 
       - name: Validate NVD database cache before saving
+        id: validate-nvd-cache
         if: always()
         run: |
           NVD_DIR="${HOME}/.m2/repository/org/owasp/dependency-check-utils"
@@ -108,11 +110,11 @@ jobs:
           echo "NVD database directory verified: ${COUNT} files present."
 
       - name: Save NVD vulnerability database cache (persists even on partial progress)
-        if: always()
+        if: always() && steps.validate-nvd-cache.outcome == 'success'
         uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: ~/.m2/repository/org/owasp/dependency-check-utils
-          key: ${{ runner.os }}-nvd-data-${{ steps.nvd-cache-key.outputs.week }}
+          key: ${{ runner.os }}-nvd-data-${{ steps.nvd-cache-key.outputs.week }}-${{ github.run_id }}
 
       - name: Run test suite
         run: clojure -M:test
