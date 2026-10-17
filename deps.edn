@@ -4,7 +4,9 @@
   org.clojure/spec.alpha {:mvn/version "0.5.238"}
   org.clojure/core.logic {:mvn/version "1.0.1"}
   org.clojure/core.async {:mvn/version "1.6.681"}
-  com.xtdb/xtdb-core {:mvn/version "1.24.4"}
+  com.xtdb/xtdb-core {:mvn/version "1.24.4"
+                      :exclusions [org.lz4/lz4-java]}
+  at.yawk.lz4/lz4-java {:mvn/version "1.11.4"}
   com.xtdb/xtdb-rocksdb {:mvn/version "1.24.4"}
   http-kit/http-kit {:mvn/version "2.8.0"}
   metosin/reitit {:mvn/version "0.7.2"}

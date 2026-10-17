@@ -49,7 +49,7 @@ echo "Waiting for Phase 1 server (PID ${SERVER_PID}) to accept connections..."
 wait_for_server
 
 echo "Querying match report M42 from seeded RocksDB..."
-PHASE1_RESP=$(curl -s -f "http://127.0.0.1:${SMOKE_PORT}/matches/m-42")
+PHASE1_RESP=$(curl -s -f "http://127.0.0.1:${SMOKE_PORT}/matches/M42")
 if ! echo "${PHASE1_RESP}" | grep -q "France"; then
   echo "ERROR: Match report M42 did not contain expected content 'France'!" >&2
   echo "${PHASE1_RESP}" | head -n 30 >&2
@@ -75,7 +75,7 @@ echo "Waiting for Phase 2 server (PID ${SERVER_PID}) to accept connections..."
 wait_for_server
 
 echo "Querying match report M42 to verify persistence across restart..."
-PHASE2_RESP=$(curl -s -f "http://127.0.0.1:${SMOKE_PORT}/matches/m-42")
+PHASE2_RESP=$(curl -s -f "http://127.0.0.1:${SMOKE_PORT}/matches/M42")
 if ! echo "${PHASE2_RESP}" | grep -q "France"; then
   echo "ERROR: Match report M42 was NOT found after unseeded restart!" >&2
   echo "${PHASE2_RESP}" | head -n 30 >&2
