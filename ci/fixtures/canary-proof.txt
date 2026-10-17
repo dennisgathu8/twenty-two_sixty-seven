@@ -1,0 +1,1 @@
+CANARY_VERIFIED: 2026-10-17T12:00:00Z strategy=github-advisory

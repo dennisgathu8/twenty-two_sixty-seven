@@ -61,5 +61,9 @@ if ! grep -q "ALLOWLISTED" "${CANARY_OUT}"; then
 fi
 echo "Canary Pass 2 passed: Gate correctly passed on valid allowlisted exception (exit ${PASS2_STATUS})."
 
+CANARY_PROOF="/tmp/canary_scan_proof.txt"
+echo "CANARY_VERIFIED: $(date -u +%Y-%m-%dT%H:%M:%SZ) strategy=github-advisory" > "${CANARY_PROOF}"
+echo "Canary proof written to ${CANARY_PROOF}"
+
 echo "Canary verification passed: Complete CVE gate decision pipeline successfully verified end-to-end."
 exit 0

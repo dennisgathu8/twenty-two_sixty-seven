@@ -1,0 +1,5 @@
+[{:id "CVE-2099-0001"
+  :ecosystem :maven
+  :package "other.group/wrong-package"
+  :justification "Allowlist entry specifying wrong package to verify strict package matching"
+  :expires-on "2099-12-31"}]

@@ -1,0 +1,24 @@
+[
+  {
+    "dependency": "foo.bar/sample-lib",
+    "mvn/version": "1.0.0",
+    "paths": ["/tmp/sample-lib-1.0.0.jar"],
+    "vulnerabilities": [
+      {
+        "vulnerableVersionRange": "< 2.0.0",
+        "advisory": {
+          "summary": "Sample finding with missing CVSS score",
+          "severity": "LOW",
+          "cvss": {
+            "score": null
+          },
+          "identifiers": [
+            {
+              "value": "CVE-2099-0003"
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,4 @@
+[{:id "CVE-2099-0001"
+  :ecosystem :maven
+  :package "foo.bar/sample-lib"
+  :justification "Allowlist entry missing expires-on key to test mandatory expiry validation"}]
