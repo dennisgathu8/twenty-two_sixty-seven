@@ -11,6 +11,10 @@ set -euo pipefail
 LOG_FILE="/tmp/bwr_compile.log"
 SENTINEL="ALL_BWR_NAMESPACES_LOADED"
 
+if [ ! -w "${HOME}" ]; then
+  export HOME="/tmp"
+fi
+
 echo "Discovering application namespaces under src/bwr/..."
 NAMESPACES=$(find src/bwr -name "*.clj" | sed -e 's|^src/||' -e 's|\.clj$||' -e 's|/|.|g' -e 's|_|-|g' | sort)
 

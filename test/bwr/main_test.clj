@@ -8,7 +8,8 @@
   (try
     (f)
     (finally
-      (main/stop!))))
+      (main/stop!)
+      (Thread/sleep 50))))
 
 (use-fixtures :each with-clean-system)
 
@@ -69,18 +70,18 @@
 (deftest rate-limiter-threshold-enforcement-test
   (testing "Limiter returns 429 with Retry-After at configured threshold"
     (main/stop!)
-    (is (= :started (main/start! {:port 3000
+    (is (= :started (main/start! {:port 3001
                                   :topology :in-memory
                                   :rate-limit-opts {:max-requests 2 :window-seconds 30}})))
     (try
       ;; First 2 requests within budget
-      (let [r1 @(http/get "http://localhost:3000/health")
-            r2 @(http/get "http://localhost:3000/health")]
+      (let [r1 @(http/get "http://localhost:3001/health")
+            r2 @(http/get "http://localhost:3001/health")]
         (is (= 200 (:status r1)))
         (is (= 200 (:status r2))))
 
       ;; 3rd request trips the threshold
-      (let [{:keys [status headers body]} @(http/get "http://localhost:3000/health")
+      (let [{:keys [status headers body]} @(http/get "http://localhost:3001/health")
             body-str (if (string? body) body (slurp body :encoding "UTF-8"))]
         (is (= 429 status))
         (is (some? (or (get headers :retry-after) (get headers "retry-after"))))
