@@ -13,6 +13,8 @@ TMP_DATA=$(mktemp -d /tmp/bwr_rocksdb_smoke_XXXXXX)
 SMOKE_PORT=3333
 SERVER_PID=""
 
+# Invoked indirectly via trap on script EXIT, INT, and TERM (false positive for unreachable code)
+# shellcheck disable=SC2317
 cleanup() {
   if [ -n "${SERVER_PID}" ] && kill -0 "${SERVER_PID}" 2>/dev/null; then
     echo "Stopping server process (PID ${SERVER_PID})..."
