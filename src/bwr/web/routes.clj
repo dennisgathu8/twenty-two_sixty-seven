@@ -6,7 +6,7 @@
             [clojure.string :as str]
             [clojure.java.io :as io]
             [reitit.ring :as ring]
-            [reitit.ring.middleware.parameters :as params]
+            [ring.middleware.params :as params]
             [ring.middleware.cookies :as cookies]
             [ring.util.response :as resp]
             [clojure.data.json :as json]
@@ -21,6 +21,13 @@
             [bwr.web.views.admin :as admin]))
 
 (set! *warn-on-reflection* true)
+
+(def parameters-middleware
+  "Middleware to parse urlencoded parameters from query string and form body.
+   Replaces reitit.ring.middleware.parameters/parameters-middleware to eliminate
+   the metosin/reitit umbrella dependency tree (muuntaja, transit, msgpack)."
+  {:name ::parameters
+   :wrap params/wrap-params})
 
 ;; ============================================================================
 ;; Boundary Parameter Validation Specs (§9.1)
@@ -536,7 +543,7 @@
                           (sec/create-rate-limiter {:max-requests 100 :window-seconds 60}))
          trusted-proxies (or (:trusted-proxies opts) #{})
          router (ring/router (create-routes node)
-                             {:data {:middleware [params/parameters-middleware]}})
+                             {:data {:middleware [parameters-middleware]}})
          app (ring/ring-handler
               router
               (ring/create-default-handler
