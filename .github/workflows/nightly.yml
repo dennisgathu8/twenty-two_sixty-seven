@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -29,18 +29,18 @@ jobs:
         run: bash ci/guard-bwr-env.sh
 
       - name: Set up Temurin JDK 17
-        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: 'temurin'
           java-version: '17.0.20'
 
       - name: Set up Node.js (pinned to 22.14.0)
-        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.14.0'
 
       - name: Cache Maven and Clojure classpath
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.m2/repository
@@ -50,7 +50,7 @@ jobs:
             ${{ runner.os }}-clojure-
 
       - name: Cache npm packages
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
           key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
@@ -62,7 +62,7 @@ jobs:
         run: echo "week=$(date +'%Y-%U')" >> "$GITHUB_OUTPUT"
 
       - name: Restore NVD vulnerability database cache
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/repository/org/owasp/dependency-check-utils
           key: ${{ runner.os }}-nvd-data-${{ steps.nvd-cache-key.outputs.week }}-${{ github.run_id }}
@@ -111,7 +111,7 @@ jobs:
 
       - name: Save NVD vulnerability database cache (persists even on partial progress)
         if: always() && steps.validate-nvd-cache.outcome == 'success'
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/repository/org/owasp/dependency-check-utils
           key: ${{ runner.os }}-nvd-data-${{ steps.nvd-cache-key.outputs.week }}-${{ github.run_id }}
