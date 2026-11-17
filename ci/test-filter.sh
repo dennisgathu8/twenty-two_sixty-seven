@@ -95,6 +95,14 @@ run_test "5a. Empty report with no proof of a scan exits 1" \
 run_test "5b. Empty report with proof of a scan exits 0" \
   0 "ci/fixtures/clean-scan.json" "ci/fixtures/allowlist-empty.edn" "Clean scan: 0 vulnerability findings" "ci/fixtures/canary-proof.txt"
 
+# 5c. Empty report with positive Dependencies scanned count exits 0 (authoritative scan proof)
+run_test "5c. Empty report with positive scanned count exits 0" \
+  0 "ci/fixtures/clean-scan-with-count.json" "ci/fixtures/allowlist-empty.edn" "Verified by scanner execution proof (Dependencies scanned: 101)" ""
+
+# 5d. Empty report with 0 Dependencies scanned count exits 1 (fails closed)
+run_test "5d. Empty report with 0 scanned count exits 1" \
+  1 "ci/fixtures/clean-scan-zero-count.json" "ci/fixtures/allowlist-empty.edn" "Scanner reported 0 dependencies scanned" ""
+
 # 6. Non-existent scan file exits 1 (fails closed)
 run_test "6. Non-existent scan file exits 1" \
   1 "ci/fixtures/non-existent.json" "ci/fixtures/allowlist-empty.edn" "not found"
