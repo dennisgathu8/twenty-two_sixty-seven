@@ -40,7 +40,7 @@ clojure -M -m bwr.main --seed
 ### Running Tests
 
 ```bash
-# Run Clojure unit, boundary, and generative tests (41 tests / 455 assertions)
+# Run Clojure unit, boundary, and generative tests (52 tests / 596 assertions)
 clj -M:test
 
 # Run headless browser Playwright E2E test suite (10 specs)
@@ -53,7 +53,24 @@ npx playwright test --repeat-each=3
 ### Reflection & Strict Compilation Check
 
 ```bash
-clojure -M -e "(set! *warn-on-reflection* true) (require 'bwr.main :reload)"
+# Run the strict compilation gate (loads all 20 bwr/ namespaces with *warn-on-reflection* true)
+bash ci/compile-gate.sh
+```
+
+### Security & CI Verification Scripts
+
+```bash
+# Run shellcheck over all CI scripts
+shellcheck ci/*.sh
+
+# Run offline fixture-based verification of the CVE gate decision logic (18 tests)
+bash ci/test-filter.sh
+
+# Run the canary test proving the CVE gate fails on known vulnerabilities
+bash ci/test-canary.sh
+
+# Run the GitHub Advisory CVE audit against deps.edn
+bash ci/cve-gate.sh github-advisory
 ```
 
 ---
@@ -75,13 +92,14 @@ clojure -M -e "(set! *warn-on-reflection* true) (require 'bwr.main :reload)"
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the governing specification.
 
-1. **No framework where a library will do:** Ring + http-kit + Reitit + Hiccup.
+1. **No framework where a library will do:** Ring + http-kit + Reitit-Ring + Hiccup.
 2. **Spec at the boundary:** All ingestion is validated via `clojure.spec.alpha` before touching business logic.
 3. **Traceability:** Every recommendation links directly to the rule and underlying match event IDs in `:recommendation/evidence`.
 4. **Scanner-Safe Authentication (§9.2):** Magic links render a confirmation step (`GET /auth/verify`) before atomic token consumption (`POST /auth/verify`), preventing enterprise email scanners from burning single-use tokens.
 5. **XTDB 1.x Bi-temporal Storage ([ADR-001](docs/adr/ADR-001-xtdb-primary-storage.md)):** Deliberately pinned to XTDB 1.x (embedded, Datalog, RocksDB-backed) to match `temporal-squad`'s proven bi-temporal pattern and keep the architecture 100% self-contained on a single box.
 6. **Discrete Events over Black Boxes ([ADR-002](docs/adr/ADR-002-no-fotmob-scraping.md)):** Strict ingestion from ToS-clean sources (Wikipedia, FBref); no scraping of third-party proprietary momentum widgets.
 7. **Edge Client-IP Attribution ([ADR-003](docs/adr/ADR-003-client-ip-trust.md)):** `wrap-client-ip` edge middleware, loopback default binding, right-to-left header traversal skipping trusted proxies, and DNS-free IP parsing.
+8. **Supply Chain Defense & CI Verification Gate ([ADR-004](docs/adr/ADR-004-ci-and-cve-gate.md)):** Strict compile gate (zero reflection warnings in `bwr/`), automated CVE audits with zero accepted vulnerabilities (`cve-allowlist.edn`), isolated Shellcheck lint job, and proof-of-scan verification across CI and Nightly NVD workflows.
 
 ---
 
@@ -89,7 +107,19 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the governing specification
 
 ```
 ├── .devcontainer/            # Docker (JDK 17, Node 22, Caddy, Mailpit), pinned SHA-256s, devcontainer.json
-├── deps.edn                  # Pinned dependencies, :dev, :test, :repl aliases
+├── .github/
+│   ├── workflows/            # GitHub Actions (ci.yml, nightly.yml, devcontainer.yml)
+│   ├── cve-allowlist.edn     # CVE exception allowlist (empty, zero accepted risks)
+│   └── dependabot.yml        # Dependabot configuration (github-actions, npm, docker)
+├── ci/                       # CI gates, lint, canary verification & CVE filtering scripts
+│   ├── compile-gate.sh       # Reflection & strict compilation check
+│   ├── cve-gate.sh           # Main supply-chain CVE gate
+│   ├── nightly-nvd-scan.sh   # Deep NIST NVD vulnerability scan
+│   ├── test-canary.sh        # Scanner canary fixture verification
+│   ├── test-filter.sh        # Offline CVE decision-logic test suite (18 tests)
+│   ├── filter-cve-findings.clj # Authoritative CVE policy evaluation & proof of scan
+│   └── validate-allowlist.clj  # Allowlist schema & expiration validation
+├── deps.edn                  # Pinned dependencies, :dev, :test, :clj-watson, :repl aliases
 ├── package.json              # Pinned Playwright test runner (@playwright/test 1.63.0)
 ├── package-lock.json         # Pinned npm dependencies lockfile
 ├── playwright.config.js      # Playwright E2E configuration & webServer lifecycle
@@ -101,7 +131,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the governing specification
 │   ├── ingest/               # Spec validation + transducer ingestion pipelines
 │   ├── rules/                # core.logic rule engine + resources/rules/*.edn loader
 │   ├── store/                # XTDB bi-temporal schema + queries (ADR-001)
-│   ├── web/                  # Reitit routes, Hiccup SSR views, session auth & cookie handling
+│   ├── web/                  # Reitit-Ring routes, Hiccup SSR views, session auth & cookie handling
 │   ├── auth/                 # Passwordless magic-link authentication & email delivery
 │   └── security/             # Security middleware, event trail, rate-limiting, IP containment
 ├── dev/
@@ -113,7 +143,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the governing specification
 ├── docs/
 │   ├── ARCHITECTURE.md       # Governing architecture specification (Steps 1–10)
 │   ├── runbook.md            # Operations runbook (§9.7, §11 — Step 10)
-│   └── adr/                  # Architectural Decision Records (ADR-001, ADR-002, ADR-003)
+│   └── adr/                  # Architectural Decision Records (ADR-001, ADR-002, ADR-003, ADR-004)
 └── README.md
 ```
 

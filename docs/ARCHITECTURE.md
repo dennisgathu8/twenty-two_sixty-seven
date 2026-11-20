@@ -69,7 +69,7 @@ These are load-bearing. Every design decision in later sections should be checka
 |---|---|---|
 | Language | Clojure (JVM) | Consistent with the whole arc; REPL-driven development; data-first idioms |
 | Web server | http-kit | Same as reference architecture; async-capable, minimal |
-| Routing | Reitit | Data-driven routes (route table is EDN, inspectable, testable without a running server) |
+| Routing | Reitit-Ring | Data-driven routes (route table is EDN, inspectable, testable without a running server; lightweight `metosin/reitit-ring`) |
 | Middleware | Ring | Standard, composable, no framework lock-in |
 | Views | Hiccup, server-rendered | No client framework; progressive enhancement only where it earns its keep (see §7) |
 | Database | **XTDB** (bi-temporal) — see ADR-001 (§14.1) | Reuses the bi-temporal modelling already proven in `temporal-squad`; "what did we know when this recommendation fired" is a native query, not bolted on |
@@ -81,7 +81,7 @@ These are load-bearing. Every design decision in later sections should be checka
 | Dev environment | Devcontainer (Docker, Caddy, Mailpit, TLS) | Checked-in, reproducible, matches reference architecture exactly (§4) |
 | Testing | `clojure.test` + `test.check` (generative) + Playwright (E2E) | Matches reference architecture |
 | Deployment | systemd units, Caddy (automatic TLS), single box | Matches reference architecture |
-| CI/CD | GitHub Actions, softened deploy window, CVE gate | Matches reference architecture |
+| CI/CD & Security | GitHub Actions, reflection gate, supply-chain CVE gate | Automated lint, compile gate, canary verification, and GitHub Advisory + Nightly NVD audits (ADR-004) |
 
 **Do not substitute** React/re-frame, a REST-then-JSON SPA, Postgres-as-primary-store, or a managed job queue (SQS/etc.) without an ADR justifying the deviation. The entire point of this stack is that it is one coherent, auditable system, not a grab-bag of best-of-breed services.
 
@@ -388,6 +388,26 @@ Work in this order. Do not start §N+1 until §N's tests pass — later stages d
 **Decision:** This project only ingests data from sources with clean redistribution terms for derived/structured data (Wikipedia, FBref match reports). No proprietary momentum index is scraped, stored, or displayed.
 
 **Consequence:** The system cannot show FotMob-equivalent minute-by-minute "momentum," only named, discrete events (goals, cards, subs, shots). This is treated as a feature, not a limitation — see §1.1.
+
+### ADR-003: Client-IP trust, proxy hardening, and edge attribution
+
+**Status:** Accepted.
+
+**Context:** Rate limiting, IP containment, and immutable security audit logs depend on accurate client-IP attribution. Defaulting to `0.0.0.0:3000` or naive leftmost `X-Forwarded-For` traversal allows header spoofing and denial-of-service framing.
+
+**Decision:** Bound the server to `127.0.0.1` by default (refusing startup on non-loopback when `BWR_ENV=test`). Introduce `wrap-client-ip` edge middleware, an explicit `BWR_TRUSTED_PROXIES` allowlist, right-to-left header traversal skipping trusted proxies, and DNS-free IPv4/IPv6 literal validation.
+
+**Consequence:** Unforwarded requests attribute strictly to `:remote-addr`. Audit trails and rate limits are protected against header manipulation.
+
+### ADR-004: Continuous Integration, toolchain pinning, and the supply-chain CVE gate
+
+**Status:** Accepted.
+
+**Context:** Correctness, throughput, and supply chain security must be continuously verified at the gate rather than deferred to manual release checklists.
+
+**Decision:** Establish automated GitHub Actions workflows (`ci.yml`, `nightly.yml`, `devcontainer.yml`) with full 40-character commit SHA pins and pinned JDK 17, Node 22, and Clojure CLI 1.12.0.1488. Enforce a strict reflection compilation gate (`bwr/` namespaces), an isolated Shellcheck lint job, and supply chain vulnerability scanning via `clj-watson` and `ci/filter-cve-findings.clj`. Remediate all CVE findings at source via dependency overrides and dependency diet (`metosin/reitit-ring`), maintaining an empty allowlist (`.github/cve-allowlist.edn`). Require the aggregate `ci-gate` status check for integration.
+
+**Consequence:** Integration requires passing lint, compile, unit, E2E, and CVE audits. Zero accepted vulnerabilities persist silently.
 
 ---
 
