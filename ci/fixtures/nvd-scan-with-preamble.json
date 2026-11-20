@@ -1,0 +1,9 @@
+Reading 18 dependency-check properties from:
+ /home/runner/.m2/repository/org/owasp/dependency-check-utils/12.2.2/data/11.0/dependency-check.properties
+No additional clj-watson properties found.
+
+Setting nvd.api.key from CLJ_WATSON_NVD_API_KEY.
+
+[]
+Dependencies scanned: 96
+Vulnerable dependencies found: 0

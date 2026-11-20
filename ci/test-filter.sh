@@ -103,6 +103,10 @@ run_test "5c. Empty report with positive scanned count exits 0" \
 run_test "5d. Empty report with 0 scanned count exits 1" \
   1 "ci/fixtures/clean-scan-zero-count.json" "ci/fixtures/allowlist-empty.edn" "Scanner reported 0 dependencies scanned" ""
 
+# 5e. Report with NVD dependency-check properties preamble parses and exits 0
+run_test "5e. Report with NVD properties preamble parses and exits 0" \
+  0 "ci/fixtures/nvd-scan-with-preamble.json" "ci/fixtures/allowlist-empty.edn" "Verified by scanner execution proof (Dependencies scanned: 96)" ""
+
 # 6. Non-existent scan file exits 1 (fails closed)
 run_test "6. Non-existent scan file exits 1" \
   1 "ci/fixtures/non-existent.json" "ci/fixtures/allowlist-empty.edn" "not found"
