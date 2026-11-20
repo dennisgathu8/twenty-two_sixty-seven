@@ -25,7 +25,7 @@
   io.airlift/aircompressor {:mvn/version "2.0.3"}
   org.clojure/data.csv {:mvn/version "1.1.0"}
   org.clojure/data.json {:mvn/version "2.5.1"}
-  org.clojure/tools.logging {:mvn/version "1.3.0"}
+  org.clojure/tools.logging {:mvn/version "1.3.1"}
   org.slf4j/slf4j-nop {:mvn/version "1.7.36"}}
 
  :aliases

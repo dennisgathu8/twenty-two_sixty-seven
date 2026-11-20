@@ -12,13 +12,21 @@ CANARY_OUT="/tmp/canary_pipeline.log"
 
 echo "Running canary vulnerability scan against ${CANARY_DIR}/deps.edn..."
 
-set +e
-(cd "${CANARY_DIR}" && clojure -M:clj-watson scan -p deps.edn --database-strategy github-advisory -o json > "${CANARY_JSON}" 2> "${CANARY_ERR}")
-SCAN_STATUS=$?
-set -e
+SCAN_STATUS=1
+for attempt in 1 2 3; do
+  set +e
+  (cd "${CANARY_DIR}" && clojure -M:clj-watson scan -p deps.edn --database-strategy github-advisory -o json > "${CANARY_JSON}" 2> "${CANARY_ERR}")
+  SCAN_STATUS=$?
+  set -e
+  if [ "${SCAN_STATUS}" -eq 0 ]; then
+    break
+  fi
+  echo "WARN: clj-watson canary scan attempt ${attempt}/3 failed (exit ${SCAN_STATUS}). Retrying in $((attempt * 5))s..." >&2
+  sleep $((attempt * 5))
+done
 
 if [ "${SCAN_STATUS}" -ne 0 ]; then
-  echo "CRITICAL: clj-watson canary scan execution failed!" >&2
+  echo "CRITICAL: clj-watson canary scan execution failed after 3 attempts!" >&2
   cat "${CANARY_ERR}" >&2
   exit 1
 fi

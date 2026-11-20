@@ -57,13 +57,25 @@ jobs:
         with:
           path: |
             ~/.m2/repository
+            ~/.gitlibs
             ~/.cpcache
-          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'ci/canary/deps.edn') }}
           restore-keys: |
             ${{ runner.os }}-clojure-
 
       - name: Install Clojure CLI (pinned to 1.12.0.1488)
         run: bash ci/install-clojure.sh
+
+      - name: Pre-fetch project and scanner dependencies
+        run: |
+          for attempt in 1 2 3; do
+            if clojure -P && clojure -A:clj-watson -P && (cd ci/canary && clojure -A:clj-watson -P); then
+              echo "Dependencies pre-fetched successfully."
+              break
+            fi
+            echo "WARN: Dependency pre-fetch attempt ${attempt}/3 failed. Retrying in 10s..."
+            sleep 10
+          done
 
       - name: Execute Compile Gate (strict reflection filtering under bwr/)
         run: bash ci/compile-gate.sh
@@ -72,6 +84,7 @@ jobs:
     name: unit
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    needs: [compile]
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -92,8 +105,9 @@ jobs:
         with:
           path: |
             ~/.m2/repository
+            ~/.gitlibs
             ~/.cpcache
-          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'ci/canary/deps.edn') }}
           restore-keys: |
             ${{ runner.os }}-clojure-
 
@@ -110,6 +124,7 @@ jobs:
     name: e2e
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    needs: [compile]
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -132,8 +147,9 @@ jobs:
         with:
           path: |
             ~/.m2/repository
+            ~/.gitlibs
             ~/.cpcache
-          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'ci/canary/deps.edn') }}
           restore-keys: |
             ${{ runner.os }}-clojure-
 
@@ -171,6 +187,7 @@ jobs:
     name: deps-audit
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    needs: [compile]
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -196,8 +213,9 @@ jobs:
         with:
           path: |
             ~/.m2/repository
+            ~/.gitlibs
             ~/.cpcache
-          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'ci/canary/deps.edn') }}
           restore-keys: |
             ${{ runner.os }}-clojure-
 

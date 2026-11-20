@@ -45,8 +45,9 @@ jobs:
         with:
           path: |
             ~/.m2/repository
+            ~/.gitlibs
             ~/.cpcache
-          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'ci/canary/deps.edn') }}
           restore-keys: |
             ${{ runner.os }}-clojure-
 
@@ -73,6 +74,17 @@ jobs:
 
       - name: Install Clojure CLI (pinned to 1.12.0.1488)
         run: bash ci/install-clojure.sh
+
+      - name: Pre-fetch project and scanner dependencies
+        run: |
+          for attempt in 1 2 3; do
+            if clojure -P && clojure -A:clj-watson -P && (cd ci/canary && clojure -A:clj-watson -P); then
+              echo "Dependencies pre-fetched successfully."
+              break
+            fi
+            echo "WARN: Dependency pre-fetch attempt ${attempt}/3 failed. Retrying in 10s..."
+            sleep 10
+          done
 
       - name: Install npm dependencies (ignore-scripts)
         run: npm ci --ignore-scripts
